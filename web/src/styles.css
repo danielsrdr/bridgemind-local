@@ -1,0 +1,33 @@
+@import 'tailwindcss';
+@import '@xterm/xterm/css/xterm.css';
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-sans: 'Segoe UI Variable', 'Segoe UI', system-ui, sans-serif;
+  --font-mono: 'Cascadia Code', 'Cascadia Mono', Consolas, monospace;
+  --color-bg: #0b0c10;
+  --color-panel: #111318;
+  --color-panel2: #171a21;
+  --color-line: #232733;
+  --color-mute: #8a90a2;
+  --color-text: #e6e8ee;
+  --color-accent: #7c5cff;
+  --color-ok: #3ecf8e;
+  --color-warn: #f5b84a;
+  --color-bad: #f2555a;
+}
+html:not(.dark) {
+  --color-bg: #f6f7fb; --color-panel: #ffffff; --color-panel2: #f0f2f7; --color-line: #dfe3ec; --color-mute: #6a7085; --color-text: #161922;
+}
+html, body, #root { height: 100%; }
+body { margin: 0; background: var(--color-bg); color: var(--color-text); font-family: var(--font-sans); font-size: 13px; overflow: hidden; }
+* { scrollbar-width: thin; scrollbar-color: var(--color-line) transparent; }
+.xterm { padding: 6px 0 0 8px; height: 100%; }
+.xterm-viewport { background: transparent !important; }
+button { cursor: pointer; }
+@utility btn { @apply inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium border border-line bg-panel2 hover:border-accent/60 hover:text-white transition-colors disabled:opacity-40; }
+@utility btn-p { @apply btn bg-accent border-accent text-white hover:brightness-110; }
+@utility inp { @apply w-full rounded-md border border-line bg-bg px-2 py-1 text-xs outline-none focus:border-accent; }
+@utility dot { @apply inline-block size-2 rounded-full shrink-0; }
+@utility lbl { @apply text-[10px] uppercase tracking-wider text-mute font-semibold; }
