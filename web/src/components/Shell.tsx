@@ -10,7 +10,7 @@ export function TitleBar() {
   const busy = live.filter((a) => a.status === 'working').length, waiting = live.filter((a) => a.status === 'waiting').length;
   const modes: [Mode, string, string][] = [['agent', 'Agent', 'Ctrl+1'], ['code', 'Code', 'Ctrl+2'], ['thread', 'Thread', 'Ctrl+3']];
   return (
-    <div className="h-11 flex items-center gap-3 px-3 border-b border-line bg-panel shrink-0">
+    <div className={`drag h-11 flex items-center gap-3 pl-3 border-b border-line bg-panel shrink-0 ${(window as any).desktop ? "pr-[150px]" : "pr-3"}`}>
       <div className="flex items-center gap-2 w-52">
         <div className="size-6 rounded-md bg-accent grid place-items-center text-white text-xs font-bold">B</div>
         <b className="text-sm tracking-tight">BridgeMind <span className="text-mute font-normal">local</span></b>

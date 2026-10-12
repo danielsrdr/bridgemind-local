@@ -31,3 +31,8 @@ button { cursor: pointer; }
 @utility inp { @apply w-full rounded-md border border-line bg-bg px-2 py-1 text-xs outline-none focus:border-accent; }
 @utility dot { @apply inline-block size-2 rounded-full shrink-0; }
 @utility lbl { @apply text-[10px] uppercase tracking-wider text-mute font-semibold; }
+
+/* Desktop app: the title bar is the window drag handle; controls inside stay clickable. */
+.drag { -webkit-app-region: drag; user-select: none; }
+.drag button, .drag input, .drag select, .drag a { -webkit-app-region: no-drag; }
+[data-modal] { -webkit-app-region: no-drag; }

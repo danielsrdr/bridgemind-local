@@ -5,20 +5,29 @@ Remplace BridgeMind : terminaux splitables, threads, routines planifiées, dict�
 
 Aucun abonnement en plus : les agents utilisent ton compte Claude Code existant (Pro/Max). Aucune donnée ne quitte la machine, à part les appels que Claude Code fait lui-même.
 
-## Démarrer
+## Installer (appli Windows)
 
 ```bash
 npm install
-npm run build
-powershell -ExecutionPolicy Bypass -File scripts/install-shortcut.ps1
+node node_modules/electron/install.js
+npm run install
 ```
 
-Ensuite, double-clique sur **BridgeMind** (bureau / menu Démarrer). Le hub démarre en arrière-plan sans console, et l'app s'ouvre dans une fenêtre dédiée (Edge `--app`, le même moteur WebView2 que Tauri, sans Rust à installer).
-Fermer la fenêtre ne tue pas les agents. Pour tout arrêter : ⚙ → *Arrêter le hub*.
+- `node node_modules/electron/install.js` télécharge le binaire Electron (npm ≥ 11 bloque les scripts d'installation).
+- `npm run install` compile tout et crée `BridgeMind.exe`.
+- L'appli est installée dans `%LOCALAPPDATA%\Programs\BridgeMind` (sans droits admin), avec un raccourci sur le bureau et dans le menu Démarrer.
+- Elle apparaît dans *Paramètres → Applications installées*, d'où on peut la désinstaller.
 
-Pour le développement : `npm run dev` (hub en watch + Vite HMR sur http://localhost:5173).
+C'est une vraie appli de bureau, comme l'appli Claude : fenêtre sans cadre avec barre de titre intégrée, icône dans la barre des tâches, instance unique et icône près de l'horloge.
+- **Fermer la fenêtre** la cache près de l'horloge : les agents continuent de tourner.
+- **Quitter** (clic droit sur l'icône → Quitter) arrête le hub et tous les agents.
 
-Prérequis : Node ≥ 24 (SQLite intégré, exécution TypeScript native) et Claude Code connecté une fois. Le CLI embarqué dans l'appli Claude Desktop est détecté automatiquement.
+Développement :
+- `npm run dev` : hub en watch + Vite HMR sur http://localhost:5173.
+- `npm run app` : appli Electron lancée depuis les sources.
+- Sans Electron, `scripts/launch.vbs` ouvre l'UI dans une fenêtre Edge.
+
+Prérequis : Node ≥ 24 et Claude Code connecté une fois. Le CLI est détecté automatiquement (`~/.local/bin`, PATH, ou celui embarqué dans l'appli Claude Desktop).
 
 ## Les 3 modes
 
@@ -72,6 +81,7 @@ Même tâche headless : 167k → 58k tokens (−65 %), 2× plus rapide.
 ## Architecture
 
 ```
+electron/   main.cjs (fenêtre, icône près de l'horloge, hub en process enfant) + preload.cjs
 hub/        Node 24, un seul process, TypeScript exécuté nativement (pas de build)
   index.ts    HTTP API + WebSocket + fichiers statiques + boot
   bus.ts      agents / messages / tâches / notes (SQLite, node:sqlite)

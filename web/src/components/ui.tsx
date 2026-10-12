@@ -16,7 +16,7 @@ export const fmtTok = (n: number) => (n > 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >
 export function Modal({ title, onClose, children, wide }: { title: string; onClose: () => void; children: ReactNode; wide?: boolean }) {
   useEffect(() => { const k = (e: KeyboardEvent) => e.key === 'Escape' && onClose(); addEventListener('keydown', k); return () => removeEventListener('keydown', k); }, [onClose]);
   return (
-    <div className="fixed inset-0 z-50 bg-black/60 grid place-items-center p-6" onMouseDown={onClose}>
+    <div data-modal className="fixed inset-0 z-50 bg-black/60 grid place-items-center p-6" onMouseDown={onClose}>
       <div className={`bg-panel border border-line rounded-xl shadow-2xl w-full ${wide ? 'max-w-4xl' : 'max-w-lg'} max-h-[88vh] flex flex-col`} onMouseDown={(e) => e.stopPropagation()}>
         <div className="flex items-center px-4 py-3 border-b border-line"><b className="text-sm">{title}</b><button className="ml-auto text-mute hover:text-text" onClick={onClose}>✕</button></div>
         <div className="p-4 overflow-auto">{children}</div>
