@@ -12,6 +12,7 @@ export interface Workspace { id: string; name: string; folders: string[]; layout
 export interface Term { id: string; title: string; cwd: string; agent: string | null; workspace: string | null; cmd: string; args: string[]; pid: number; alive: boolean; started: number }
 export interface Routine { id: string; name: string; prompt: string; schedule: string; profile?: string; cwd?: string; enabled: boolean; notify?: string; next: number | null }
 export interface Run { id: number; routine: string | null; agent: string; started: number; ended: number | null; status: string; result: string | null; cost: number | null; tokens: number | null }
-export interface Settings { claudePath: string; hub: string; dataDir: string; lastWorkspace: string | null; integrated: boolean }
+export interface Settings { claudePath: string; hub: string; dataDir: string; lastWorkspace: string | null; integrated: boolean; dictation: Dictation }
+export interface Dictation { enabled: boolean; hotkey: string; model: string; language: string; autoEnter: boolean }
 export interface ThreadMeta { id: string; path: string; project: string; cwd: string | null; title: string; mtime: number; size: number }
 export interface Item { k: 'user' | 'text' | 'tool' | 'result' | 'thinking'; t: string; tool?: string; input?: any; err?: boolean; ts?: string }

@@ -71,6 +71,7 @@ export function connect() {
       case 'task:remove': return useS.setState({ tasks: s.tasks.filter((t) => t.id !== d) });
       case 'note': return useS.setState({ notes: upsert(s.notes, d, 'k') });
       case 'note:remove': return useS.setState({ notes: s.notes.filter((n) => n.k !== d) });
+      case 'settings': return useS.setState({ settings: d });
       case 'run': return useS.setState({ runs: upsert(s.runs, d, 'id').sort((a, b) => b.id - a.id) });
     }
   };

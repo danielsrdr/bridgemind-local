@@ -80,7 +80,7 @@ export function protocol(a: { name: string; role?: string | null; parent?: strin
 
 const hookSettings = (name: string) => {
   const h = (ev: string, matcher?: boolean) => [{ ...(matcher ? { matcher: '*' } : {}), hooks: [{ type: 'http', url: `${HUB}/hook/${ev}?agent=${encodeURIComponent(name)}`, timeout: 10 }] }];
-  return { permissions: { allow: ['mcp__bridge'] }, hooks: {
+  return { permissions: { allow: ['mcp__bridge'] }, voice: { enabled: true, mode: 'hold' }, hooks: {
     SessionStart: h('SessionStart'), UserPromptSubmit: h('UserPromptSubmit'), PreToolUse: h('PreToolUse', true),
     PostToolUse: h('PostToolUse', true), Notification: h('Notification'), Stop: h('Stop'), SessionEnd: h('SessionEnd'),
   } };

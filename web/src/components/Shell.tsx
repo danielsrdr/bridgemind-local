@@ -140,6 +140,7 @@ export function Settings() {
           </div>
           <p className="text-[11px] text-mute mt-2">Multi-comptes : mets un « dossier de config » différent par compte (CLAUDE_CONFIG_DIR) puis lance <code>/login</code> une fois dans un pane de ce profil. IA locale : profil « Local » → Ollama (≥ 0.14, API compatible Anthropic) sur localhost:11434.</p>
         </section>
+        <DictationSettings />
         <section className="grid gap-2">
           <div className="lbl">Claude Code</div>
           <div className="flex gap-2"><input className="inp font-mono" value={path} onChange={(e) => setPath(e.target.value)} /><button className="btn" onClick={() => api('settings', 'POST', { claudePath: path }).then(refresh)}>OK</button></div>
@@ -189,5 +190,42 @@ function ProfileEditor({ p, onClose }: { p: Profile; onClose: () => void }) {
         <div className="flex justify-end"><button className="btn-p" disabled={!o.name} onClick={save}>Enregistrer</button></div>
       </div>
     </Modal>
+  );
+}
+
+const MODELS = [
+  ['onnx-community/whisper-base', 'Base — rapide (~80 Mo)'],
+  ['onnx-community/whisper-small', 'Small — recommandé (~250 Mo)'],
+  ['onnx-community/whisper-large-v3-turbo', 'Large v3 turbo — le plus précis (~800 Mo, GPU)'],
+];
+
+function DictationSettings() {
+  const d = useS((s) => s.settings.dictation);
+  if (!d) return null;
+  const desktop = (window as any).desktop;
+  const save = async (p: Partial<typeof d>) => {
+    const c = await api('dictation', 'POST', p);
+    desktop?.setDictation(c);
+  };
+  return (
+    <section className="grid gap-2 text-xs">
+      <div className="lbl">Dictée vocale (100 % locale)</div>
+      {desktop ? (
+        <>
+          <label className="flex gap-2 items-center"><input type="checkbox" checked={d.enabled} onChange={(e) => save({ enabled: e.target.checked })} />
+            Dictée partout dans Windows : maintiens le raccourci, parle, relâche → le texte est collé dans la fenêtre active (terminal, Claude, navigateur…)</label>
+          <div className="grid grid-cols-3 gap-2">
+            <label><div className="lbl mb-1">Raccourci (maintenir)</div><select className="inp" value={d.hotkey} onChange={(e) => save({ hotkey: e.target.value })}>
+              <option value="ctrl+win">Ctrl + Win</option><option value="ctrl+alt">Ctrl + Alt</option><option value="ctrl+shift">Ctrl + Maj</option><option value="right-ctrl">Ctrl droit</option></select></label>
+            <label><div className="lbl mb-1">Modèle Whisper</div><select className="inp" value={d.model} onChange={(e) => save({ model: e.target.value })}>
+              {MODELS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></label>
+            <label><div className="lbl mb-1">Langue</div><select className="inp" value={d.language} onChange={(e) => save({ language: e.target.value })}>
+              <option value="french">Français</option><option value="english">English</option></select></label>
+          </div>
+          <label className="flex gap-2 items-center"><input type="checkbox" checked={d.autoEnter} onChange={(e) => save({ autoEnter: e.target.checked })} />Appuyer sur Entrée après la dictée (envoi direct du prompt)</label>
+        </>
+      ) : <p className="text-mute">La dictée globale (partout dans Windows) n'est disponible que dans l'appli de bureau.</p>}
+      <p className="text-[11px] text-mute">Dans BridgeMind : Ctrl+Espace ou 🎙. Dans le CLI Claude (panes et ton terminal) : la dictée intégrée de Claude Code est activée → maintiens <b>Espace</b> sur un prompt vide.</p>
+    </section>
   );
 }

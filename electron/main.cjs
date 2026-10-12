@@ -6,6 +6,7 @@ const { join } = require('node:path');
 const { existsSync, mkdirSync, openSync, readFileSync, writeFileSync } = require('node:fs');
 const http = require('node:http');
 const os = require('node:os');
+const dictation = require('./dictation.cjs');
 
 const PORT = Number(process.env.BRIDGE_PORT || 7777);
 const HUB = `http://127.0.0.1:${PORT}`;
@@ -84,6 +85,9 @@ function createTray() {
   tray.on('click', show);
 }
 
+const getJson = (path) => new Promise((ok) => http.get(HUB + path, (res) => { let b = ''; res.on('data', (c) => (b += c)); res.on('end', () => { try { ok(JSON.parse(b)); } catch { ok(null); } }); }).on('error', () => ok(null)));
+ipcMain.handle('dictation-config', (_e, c) => dictation.setConfig(c));
+
 ipcMain.handle('titlebar-theme', (_e, t) => { try { win?.setTitleBarOverlay(t); } catch {} });
 
 app.on('second-instance', show);
@@ -94,6 +98,7 @@ app.whenReady().then(async () => {
   createTray();
   await startHub();
   createWindow();
+  try { dictation.init(HUB, await getJson('/api/dictation')); } catch (e) { console.error('dictation disabled:', e); }
 });
 app.on('window-all-closed', () => {}); // stay in tray
-app.on('before-quit', () => { quitting = true; stopHub(); });
+app.on('before-quit', () => { quitting = true; dictation.dispose(); stopHub(); });

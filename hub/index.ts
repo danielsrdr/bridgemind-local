@@ -37,8 +37,10 @@ const workspaces = {
 const state = () => ({
   agents: agents.list(), terms: ptys.list(), tasks: tasks.list(), messages: messages.recent(300), notes: notes.list(),
   profiles: profiles.list(), workspaces: workspaces.list(), routines: routinesView(), runs: recentRuns(),
-  settings: { claudePath: claudeBin(), hub: HUB, dataDir: DATA_DIR, lastWorkspace: kvGet('lastWorkspace', null), integrated: kvGet('integrated', false) },
+  settings: { claudePath: claudeBin(), hub: HUB, dataDir: DATA_DIR, lastWorkspace: kvGet('lastWorkspace', null), integrated: kvGet('integrated', false), dictation: dictationCfg() },
 });
+
+const dictationCfg = () => ({ enabled: true, hotkey: 'ctrl+win', model: 'onnx-community/whisper-small', language: 'french', autoEnter: false, ...kvGet('dictation', {}) });
 
 // ---------- global integration (opt-in): makes ANY Claude Code session (desktop app included) a team member ----------
 function integrate(on: boolean) {
@@ -58,7 +60,7 @@ function integrate(on: boolean) {
 }
 
 // ---------- http ----------
-const MIME: Record<string, string> = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.woff2': 'font/woff2', '.json': 'application/json' };
+const MIME: Record<string, string> = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.woff2': 'font/woff2', '.json': 'application/json', '.wasm': 'application/wasm', '.mjs': 'text/javascript' };
 const json = (res: ServerResponse, data: unknown, code = 200) => res.writeHead(code, { 'Content-Type': 'application/json' }).end(JSON.stringify(data ?? null));
 const readBody = (req: IncomingMessage) => new Promise<string>((ok) => { let b = ''; req.on('data', (c) => (b += c)); req.on('end', () => ok(b)); });
 
@@ -124,6 +126,9 @@ async function api(req: IncomingMessage, res: ServerResponse, url: URL, body: an
     case 'settings':
       if (m === 'POST') { if ('claudePath' in body) kvSet('claudePath', body.claudePath); return json(res, state().settings); }
       break;
+    case 'dictation':
+      if (m === 'POST') { kvSet('dictation', { ...kvGet('dictation', {}), ...body }); events.emit('ui', { type: 'settings', data: state().settings }); }
+      return json(res, dictationCfg());
     case 'shutdown':
       json(res, true);
       setTimeout(() => { ptys.killAll(); process.exit(0); }, 200);

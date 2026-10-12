@@ -2,7 +2,7 @@
 #   %LOCALAPPDATA%\Programs\BridgeMind  + Desktop & Start menu shortcuts + "Installed apps" entry (uninstallable).
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
-$src = Join-Path $root 'out\BridgeMind-win32-x64'
+$src = Join-Path $root 'release\BridgeMind-win32-x64'
 $dst = Join-Path $env:LOCALAPPDATA 'Programs\BridgeMind'
 if (-not (Test-Path "$src\BridgeMind.exe")) { throw "Run 'npm run package' first." }
 

@@ -11,7 +11,7 @@
     "build:hub": "esbuild hub/index.ts --bundle --platform=node --format=esm --target=node24 --outfile=build/hub.mjs --external:@lydell/node-pty --banner:js=\"import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);\"",
     "app": "npm run build && electron .",
     "app:dev": "electron .",
-    "package": "npm run build && electron-packager . BridgeMind --platform=win32 --arch=x64 --icon=electron/icon.ico --out=out --overwrite --no-asar --app-version=0.2.0 --win32metadata.ProductName=BridgeMind --win32metadata.FileDescription=BridgeMind --ignore=\"^/(web|hub|scripts|docs|out)(/|$)\" --ignore=\"^/node_modules/(?!@lydell)\" --prune=false --ignore=\"^/(tsconfig.json|vite.config.ts|CLAUDE.md|.gitignore)$\"",
+    "package": "npm run build && electron-packager . BridgeMind --platform=win32 --arch=x64 --icon=electron/icon.ico --out=release --overwrite --no-asar --app-version=0.2.0 --win32metadata.ProductName=BridgeMind --win32metadata.FileDescription=BridgeMind --ignore=\"^/(web|hub|scripts|docs|out|release)(/|$)\" --ignore=\"^/node_modules/(?!@lydell|uiohook-napi|node-gyp-build)\" --prune=false --ignore=\"^/(tsconfig.json|vite.config.ts|CLAUDE.md|.gitignore)$\"",
     "install": "npm run package && powershell -ExecutionPolicy Bypass -File scripts/install-app.ps1",
     "typecheck": "tsc --noEmit -p . && tsc --noEmit -p web",
     "icon": "node scripts/make-icon.mjs"
@@ -22,6 +22,7 @@
   "dependencies": {
     "@lydell/node-pty": "^1.2.0-beta.15",
     "croner": "^10.0.1",
+    "uiohook-napi": "^1.5.5",
     "ws": "^8.22.0"
   },
   "devDependencies": {

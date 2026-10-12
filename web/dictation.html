@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <title>BridgeMind dictée</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; font: 600 13px 'Segoe UI Variable', 'Segoe UI', sans-serif; user-select: none; }
+      #pill { position: absolute; inset: 6px; border-radius: 999px; background: rgba(17, 19, 24, .94); border: 1px solid #2c3140; color: #e6e8ee;
+        display: flex; align-items: center; gap: 10px; padding: 0 16px; box-shadow: 0 6px 24px rgba(0,0,0,.45); }
+      #dot { width: 10px; height: 10px; border-radius: 50%; background: #f2555a; box-shadow: 0 0 0 0 rgba(242,85,90,.6); animation: pulse 1.2s infinite; flex: none; }
+      .busy #dot { background: #7c5cff; animation: spin 1s linear infinite; border-radius: 3px; }
+      .err #dot { background: #f5b84a; animation: none; }
+      #bars { display: flex; gap: 3px; align-items: center; height: 22px; flex: none; }
+      #bars i { width: 3px; border-radius: 2px; background: #7c5cff; height: 4px; transition: height .08s; }
+      #txt { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      @keyframes pulse { 70% { box-shadow: 0 0 0 8px rgba(242,85,90,0); } }
+      @keyframes spin { to { transform: rotate(360deg); } }
+    </style>
+  </head>
+  <body>
+    <div id="pill"><span id="dot"></span><span id="bars"></span><span id="txt">Écoute…</span></div>
+    <script type="module" src="/src/dictation.ts"></script>
+  </body>
+</html>

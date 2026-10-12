@@ -1,22 +1,8 @@
-// Hold-to-talk, fully local: Whisper runs in the window (transformers.js, WebGPU→WASM fallback).
-// Model is downloaded once from Hugging Face then cached by the browser. No audio leaves the machine.
+// In-app hold-to-talk (Ctrl+Space / 🎙 button). System-wide dictation lives in the desktop shell (Ctrl+Win anywhere).
 import { useEffect, useRef, useState } from 'react';
 import { useS } from '../store';
 import { typeInto } from './Terminal';
-
-let asr: Promise<any> | null = null;
-const loadAsr = () => (asr ??= (async () => {
-  const { pipeline } = await import('@huggingface/transformers');
-  const gpu = 'gpu' in navigator;
-  return pipeline('automatic-speech-recognition', 'onnx-community/whisper-base', gpu ? { device: 'webgpu', dtype: 'fp32' } : { dtype: 'q8' });
-})());
-
-async function toMono16k(blob: Blob) {
-  const ctx = new AudioContext({ sampleRate: 16000 });
-  const buf = await ctx.decodeAudioData(await blob.arrayBuffer());
-  ctx.close();
-  return buf.getChannelData(0);
-}
+import { record, toMono16k, transcribe } from '../asr';
 
 /** Insert text where the user is: focused textarea/input, else the focused terminal pane. */
 function insert(text: string) {
@@ -33,48 +19,39 @@ function insert(text: string) {
 }
 
 export function VoiceButton() {
-  const [st, setSt] = useState<'idle' | 'rec' | 'busy' | 'loading'>('idle');
-  const rec = useRef<MediaRecorder | null>(null);
-  const chunks = useRef<Blob[]>([]);
+  const [st, setSt] = useState<'idle' | 'rec' | 'busy'>('idle');
+  const cur = useRef<Awaited<ReturnType<typeof record>> | null>(null);
+  const pending = useRef(false);
+  const dictation = useS((s) => s.settings.dictation);
 
   const start = async () => {
-    if (rec.current) return;
-    loadAsr(); // warm the model while the user talks
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    const r = new MediaRecorder(stream);
-    chunks.current = [];
-    r.ondataavailable = (e) => chunks.current.push(e.data);
-    r.onstop = async () => {
-      stream.getTracks().forEach((t) => t.stop());
-      rec.current = null;
-      setSt('loading');
-      try {
-        const audio = await toMono16k(new Blob(chunks.current));
-        const model = await loadAsr();
-        setSt('busy');
-        const out = await model(audio, { language: localStorage.getItem('bm.lang') ?? 'french', task: 'transcribe', chunk_length_s: 30 });
-        const text = String(out.text ?? '').trim();
-        if (text) insert(text);
-      } catch (e) { console.error(e); }
-      setSt('idle');
-    };
-    r.start();
-    rec.current = r;
-    setSt('rec');
+    if (cur.current || pending.current) return;
+    pending.current = true;
+    try { cur.current = await record(); setSt('rec'); } catch (e) { console.error(e); } finally { pending.current = false; }
   };
-  const stop = () => rec.current?.state === 'recording' && rec.current.stop();
+  const stop = async () => {
+    const r = cur.current;
+    if (!r) return;
+    cur.current = null;
+    setSt('busy');
+    try {
+      const text = await transcribe(await toMono16k(await r.stop()), dictation?.model, dictation?.language);
+      if (text) insert(text + ' ');
+    } catch (e) { console.error(e); }
+    setSt('idle');
+  };
 
-  // Hold Ctrl+Space anywhere (also inside terminals).
   useEffect(() => {
     const down = (e: KeyboardEvent) => { if (e.ctrlKey && e.code === 'Space') { e.preventDefault(); e.stopPropagation(); if (!e.repeat) start(); } };
-    const up = (e: KeyboardEvent) => { if (e.code === 'Space' || e.key === 'Control') { if (rec.current) { e.preventDefault(); stop(); } } };
+    const up = (e: KeyboardEvent) => { if ((e.code === 'Space' || e.key === 'Control') && cur.current) { e.preventDefault(); stop(); } };
     addEventListener('keydown', down, true); addEventListener('keyup', up, true);
     return () => { removeEventListener('keydown', down, true); removeEventListener('keyup', up, true); };
-  }, []);
+  }, [dictation?.model, dictation?.language]);
 
-  const label = { idle: '🎙', rec: '● REC', loading: '…', busy: '✍' }[st];
+  const label = { idle: '🎙', rec: '● REC', busy: '✍' }[st];
   return (
-    <button className={st === 'rec' ? 'btn-p !bg-bad !border-bad' : 'btn'} title="Maintenir Ctrl+Espace (ou ce bouton) pour dicter — Whisper local"
+    <button className={st === 'rec' ? 'btn-p !bg-bad !border-bad' : 'btn'}
+      title={`Maintenir Ctrl+Espace (ou ce bouton) pour dicter ici — Whisper local.${(window as any).desktop ? ' Partout dans Windows : maintenir ' + (dictation?.hotkey ?? 'ctrl+win').replace('win', 'Win').replace('ctrl', 'Ctrl') : ''}`}
       onMouseDown={start} onMouseUp={stop} onMouseLeave={stop}>{label}</button>
   );
 }

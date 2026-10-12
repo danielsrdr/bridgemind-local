@@ -39,7 +39,17 @@ Prérequis : Node ≥ 24 et Claude Code connecté une fois. Le CLI est détecté
 
 Panneau **Équipe** (Ctrl+B) : agents en direct (● idle, ● working, ● en attente de permission), fil de messages (tu y participes en tant que `human`), tableau de tâches, notes partagées.
 **Navigateur** : aperçu localhost docké à droite.
-**Dictée** : maintiens Ctrl+Espace (ou 🎙). Whisper tourne localement dans la fenêtre ; le texte va dans le champ actif ou dans le terminal focus.
+### Dictée vocale (parler au lieu de taper)
+
+| Où | Comment | Moteur |
+|---|---|---|
+| **Partout dans Windows** (Windows Terminal, appli Claude, VS Code, navigateur…) | maintiens **Ctrl+Win**, parle, relâche → le texte est collé dans la fenêtre active | Whisper local (GPU), aucun envoi réseau |
+| Dans BridgeMind | Ctrl+Espace ou 🎙 → va dans le champ ou le terminal actif | Whisper local |
+| Dans le CLI Claude (panes, ton terminal) | maintiens **Espace** sur un prompt vide | dictée intégrée de Claude Code (activée dans  et pour tous les agents) |
+
+Réglages (⚙ → Dictée vocale) : raccourci (Ctrl+Win, Ctrl+Alt, Ctrl+Maj, Ctrl droit), modèle (base, small, large-v3-turbo), langue, Entrée automatique après la dictée.
+Le modèle se télécharge au premier lancement (~250 Mo pour small), puis il reste en cache.
+Mesuré sur l'Arc 130V : environ 2 s pour une phrase en small, 1 s en base.
 
 ## Comment les agents communiquent
 
