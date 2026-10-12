@@ -53,8 +53,11 @@ export function claudeBin(): string {
   try { cands.push(...execFileSync('where.exe', ['claude'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).split(/\r?\n/).filter((l) => /\.(exe|cmd)$/i.test(l))); } catch {}
   cands.push(join(homedir(), '.local', 'bin', 'claude.exe'));
   // Claude desktop app ships its own CLI: %APPDATA%\Claude\claude-code\<ver>\<hash>\claude.exe
-  const root = join(process.env.APPDATA ?? '', 'Claude', 'claude-code');
-  if (existsSync(root)) {
+  // (MSIX install: outside the app that folder really lives in %LOCALAPPDATA%\Packages\Claude_*\LocalCache\Roaming)
+  const roots = [join(process.env.APPDATA ?? '', 'Claude', 'claude-code')];
+  const pk = join(process.env.LOCALAPPDATA ?? '', 'Packages');
+  if (existsSync(pk)) for (const d of readdirSync(pk)) if (d.startsWith('Claude_')) roots.push(join(pk, d, 'LocalCache', 'Roaming', 'Claude', 'claude-code'));
+  for (const root of roots.filter(existsSync)) {
     const vers = readdirSync(root).filter((v) => /^\d+\.\d+\.\d+/.test(v))
       .sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
     for (const v of vers) for (const h of readdirSync(join(root, v))) cands.push(join(root, v, h, 'claude.exe'));
