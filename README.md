@@ -45,7 +45,7 @@ Panneau **Équipe** (Ctrl+B) : agents en direct (● idle, ● working, ● en a
 |---|---|---|
 | **Partout dans Windows** (Windows Terminal, appli Claude, VS Code, navigateur…) | maintiens **Ctrl+Win**, parle, relâche → le texte est collé dans la fenêtre active | Whisper local (GPU), aucun envoi réseau |
 | Dans BridgeMind | Ctrl+Espace ou 🎙 → va dans le champ ou le terminal actif | Whisper local |
-| Dans le CLI Claude (panes, ton terminal) | maintiens **Espace** sur un prompt vide | dictée intégrée de Claude Code (activée dans  et pour tous les agents) |
+| Dans le CLI Claude (panes, ton terminal) | maintiens **Espace** sur un prompt vide | dictée intégrée de Claude Code (activée dans `~/.claude/settings.json` et pour tous les agents) |
 
 Réglages (⚙ → Dictée vocale) : raccourci (Ctrl+Win, Ctrl+Alt, Ctrl+Maj, Ctrl droit), modèle (base, small, large-v3-turbo), langue, Entrée automatique après la dictée.
 Le modèle se télécharge au premier lancement (~250 Mo pour small), puis il reste en cache.
