@@ -1,6 +1,6 @@
 # Installs the packaged app like a normal Windows app (per-user, no admin):
 #   %LOCALAPPDATA%\Programs\BridgeMind  + Desktop & Start menu shortcuts + "Installed apps" entry (uninstallable).
-# The shortcuts go through the launcher (%LOCALAPPDATA%\BridgeMind-launcher), which rebuilds from the latest main when needed.
+# The shortcuts go through the launcher (%LOCALAPPDATA%\Programs\BridgeMind-launcher), which rebuilds from the latest main when needed.
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
 $src = Join-Path $root 'release\BridgeMind-win32-x64'
@@ -31,8 +31,9 @@ $common = git -C $root rev-parse --path-format=absolute --git-common-dir 2>$null
 $repo = if ($common) { Split-Path $common -Parent } else { $root }
 $ErrorActionPreference = 'Stop'
 
-# Launcher lives outside the install dir, which is replaced on every update.
-$launcher = Join-Path $env:LOCALAPPDATA 'BridgeMind-launcher'
+# Launcher lives outside the install dir, which is replaced on every update. Under Programs on purpose: new top-level
+# folders in %LOCALAPPDATA% created from an MSIX app (e.g. a Claude desktop session) are virtualized, invisible to Explorer.
+$launcher = Join-Path $env:LOCALAPPDATA 'Programs\BridgeMind-launcher'
 New-Item -ItemType Directory -Force $launcher | Out-Null
 Copy-Item (Join-Path $PSScriptRoot 'update-app.ps1'), (Join-Path $PSScriptRoot 'launch-latest.vbs') $launcher -Force
 Set-Content (Join-Path $launcher 'repo.txt') $repo
@@ -66,10 +67,10 @@ if ($p) { taskkill /PID $p /T /F | Out-Null }
 Remove-Item (Join-Path ([Environment]::GetFolderPath('Desktop')) 'BridgeMind.lnk') -ErrorAction SilentlyContinue
 Remove-Item (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\BridgeMind.lnk') -ErrorAction SilentlyContinue
 Remove-Item (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\BridgeMind - Mettre a jour.lnk') -ErrorAction SilentlyContinue
-Remove-Item (Join-Path $env:LOCALAPPDATA 'BridgeMind-launcher') -Recurse -ErrorAction SilentlyContinue
+Remove-Item (Join-Path $env:LOCALAPPDATA 'Programs\BridgeMind-launcher') -Recurse -ErrorAction SilentlyContinue
 Remove-Item 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\BridgeMind' -Recurse -ErrorAction SilentlyContinue
 Start-Process cmd -ArgumentList '/c timeout 2 >nul & rmdir /s /q "%LOCALAPPDATA%\Programs\BridgeMind"' -WindowStyle Hidden
-# Data (~\.bridgemind) and the build worktree (%LOCALAPPDATA%\BridgeMind-build) are kept on purpose.
+# Data (~\.bridgemind) and the build worktree (%LOCALAPPDATA%\Programs\BridgeMind-build) are kept on purpose.
 '@ | Set-Content -Encoding UTF8 $un
 $k = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\BridgeMind'
 New-Item $k -Force | Out-Null

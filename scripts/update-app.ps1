@@ -1,5 +1,5 @@
 ﻿# Rebuilds and reinstalls BridgeMind from the latest commit of `main` (local main, or origin/main when it is ahead).
-# The build runs in its own git worktree (%LOCALAPPDATA%\BridgeMind-build), so uncommitted edits in the repo are never shipped.
+# The build runs in its own git worktree (%LOCALAPPDATA%\Programs\BridgeMind-build), so uncommitted edits in the repo are never shipped.
 #   -IfNeeded : do nothing when the installed copy is already up to date, or when BridgeMind is running (agents would be killed).
 #   -Launch   : open BridgeMind at the end (also when nothing was rebuilt, or when the build failed).
 # The Desktop / Start menu "BridgeMind" shortcuts run this with -IfNeeded -Launch (through launch-latest.vbs, hidden).
@@ -7,7 +7,7 @@ param([string]$Repo, [switch]$IfNeeded, [switch]$Launch, [switch]$Visible)
 $ErrorActionPreference = 'Continue' # native stderr must not throw (PS 5.1); exit codes are checked
 $exe = Join-Path $env:LOCALAPPDATA 'Programs\BridgeMind\BridgeMind.exe'
 $stamp = Join-Path $env:LOCALAPPDATA 'Programs\BridgeMind\commit.txt'
-$build = Join-Path $env:LOCALAPPDATA 'BridgeMind-build'
+$build = Join-Path $env:LOCALAPPDATA 'Programs\BridgeMind-build'
 $env:GIT_TERMINAL_PROMPT = '0'
 if (-not $Repo) {
   $f = Join-Path $PSScriptRoot 'repo.txt'

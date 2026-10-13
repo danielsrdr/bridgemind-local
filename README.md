@@ -17,9 +17,9 @@ npm run app:install
 - `npm run app:install` compile tout et crée `BridgeMind.exe`.
 - L'appli est installée dans `%LOCALAPPDATA%\Programs\BridgeMind` (sans droits admin), avec un raccourci sur le bureau et dans le menu Démarrer.
 
-**Toujours la dernière version** : le raccourci « BridgeMind » (bureau, menu Démarrer, recherche Windows) passe par un lanceur (`%LOCALAPPDATA%\BridgeMind-launcher`).
+**Toujours la dernière version** : le raccourci « BridgeMind » (bureau, menu Démarrer, recherche Windows) passe par un lanceur (`%LOCALAPPDATA%\Programs\BridgeMind-launcher`).
 À chaque ouverture, il compare la version installée au dernier commit de `main` (local, ou `origin/main` s'il est en avance).
-S'il y a du nouveau, il recompile dans un dossier à part (`%LOCALAPPDATA%\BridgeMind-build`) puis réinstalle, avant d'ouvrir l'appli.
+S'il y a du nouveau, il recompile dans un dossier à part (`%LOCALAPPDATA%\Programs\BridgeMind-build`) puis réinstalle, avant d'ouvrir l'appli.
 - Seuls les changements **commités sur `main`** sont pris : les modifs en cours ne partent jamais dans l'appli.
 - Si BridgeMind est déjà ouvert, il ne le ferme pas (les agents tourneraient encore) : la mise à jour se fera au prochain démarrage.
 - Pour forcer une mise à jour : menu Démarrer → *BridgeMind - Mettre a jour*, ou `npm run update`. Journal : `~/.bridgemind/update.log`.
