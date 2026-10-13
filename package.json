@@ -49,5 +49,10 @@
     "vite": "^8.3.4",
     "zustand": "^5.0.15"
   },
-  "main": "electron/main.cjs"
+  "main": "electron/main.cjs",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/danielsrdr/bridgemind-local.git"
+  }
 }
