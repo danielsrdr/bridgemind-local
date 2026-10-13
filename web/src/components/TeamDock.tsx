@@ -95,7 +95,7 @@ const depsOf = (s: string | null) => { try { return JSON.parse(s || '[]') as unk
 
 function Tasks() {
   const tasks = useS((s) => s.tasks);
-  const agents = useS((s) => s.agents.filter((a) => a.status !== 'offline'));
+  const agents = useS((s) => s.agents).filter((a) => a.status !== 'offline'); // filter outside: a fresh array from the selector loops forever (zustand 5)
   const [title, setTitle] = useState('');
   const [assignee, setAssignee] = useState('');
   const who = agents.some((a) => a.name === assignee) ? assignee : ''; // an assignee that went offline reverts to 'libre'

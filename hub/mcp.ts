@@ -3,7 +3,8 @@
 import { randomUUID } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { agents, messages, tasks, notes } from './bus.ts';
-import { startAgent, stopAgent } from './agents.ts';
+import { startAgent, stopAgent, workflow, tierFor, EFFORTS } from './agents.ts';
+import { validate } from './schema.ts';
 
 const sessions = new Map<string, string>(); // mcp-session-id -> agent name (capped, oldest evicted)
 const remember = (sid: string, name: string) => { sessions.set(sid, name); if (sessions.size > 500) sessions.delete(sessions.keys().next().value!); };
@@ -20,14 +21,27 @@ const TOOLS = [
   { name: 'task_claim', description: 'Claim task by id, or the next open task whose deps are done.', inputSchema: S({ id: { type: 'number' } }) },
   { name: 'task_done', description: 'Finish a task with a short result (notifies its creator). failed:true marks failure.', inputSchema: S({ id: { type: 'number' }, result: str(), failed: { type: 'boolean' } }, ['id', 'result']) },
   { name: 'tasks', description: 'List tasks. status: open|claimed|done|failed.', inputSchema: S({ status: str() }) },
-  { name: 'note_set', description: 'Write shared note (spec, decision, findings). Empty value deletes.', inputSchema: S({ key: str(), value: str() }, ['key', 'value']) },
+  { name: 'note_set', description: 'Write shared note (spec, decision, findings). Empty value deletes.', inputSchema: S({ key: str(), value: str(), schema: str('note key of a JSON Schema: value must be JSON matching it, else rejected') }, ['key', 'value']) },
   { name: 'note_get', description: 'Read a shared note; no key lists keys.', inputSchema: S({ key: str() }) },
-  { name: 'spawn', description: 'Start a teammate. model: haiku|sonnet|opus|<profile id>. headless:true = one-shot, result mailed back to you (cheapest). Otherwise opens an interactive pane.', inputSchema: S({ prompt: str(), name: str(), role: str(), model: str(), cwd: str('default: your cwd'), headless: { type: 'boolean' }, effort: str('low|medium|high') }, ['prompt']) },
+  { name: 'validate', description: 'Check that note `key` is JSON matching the JSON Schema in note `schema` (gate before merging).', inputSchema: S({ key: str(), schema: str() }, ['key', 'schema']) },
+  { name: 'spawn', description: 'Start a teammate. role scan|validate (Haiku) or refactor (Sonnet, own git worktree) sets model+effort; model: haiku|sonnet|opus|<profile id> overrides. headless:true = one-shot, result mailed back to you (cheapest). Otherwise opens an interactive pane.', inputSchema: S({ prompt: str(), name: str(), role: str(), model: str(), cwd: str('default: your cwd'), headless: { type: 'boolean' }, effort: str('low|medium|high|xhigh|max'), worktree: { type: 'boolean' } }, ['prompt']) },
   { name: 'stop', description: 'Stop a teammate.', inputSchema: S({ name: str() }, ['name']) },
   { name: 'join', description: 'Set your team identity (only needed for sessions not started by BridgeMind).', inputSchema: S({ name: str(), role: str() }, ['name']) },
 ];
 
 const text = (t: string, isError = false) => ({ content: [{ type: 'text', text: t }], ...(isError ? { isError } : {}) });
+
+/** Error text, or undefined when `raw` is JSON matching the JSON Schema stored in note `schemaKey`. */
+function schemaError(raw: string | undefined, schemaKey: string) {
+  const s = notes.get(schemaKey);
+  if (s === undefined) return `no schema note "${schemaKey}"`;
+  if (raw === undefined) return 'no such note';
+  let schema: unknown, v: unknown;
+  try { schema = JSON.parse(s); } catch { return `note "${schemaKey}" is not JSON`; }
+  try { v = JSON.parse(raw); } catch (e: any) { return `not JSON: ${e.message}`; }
+  const errs = validate(v, schema);
+  return errs.length ? `${errs.length}${errs.length >= 50 ? '+' : ''} schema error(s):\n${errs.slice(0, 20).join('\n')}` : undefined;
+}
 
 /** Checks a tool call's arguments against its schema; returns an error message or undefined. */
 function argError(tool: string, a: any): string | undefined {
@@ -76,18 +90,35 @@ async function call(me: string | undefined, sid: string | undefined, tool: strin
     }
     case 'tasks':
       return text(tasks.fmt(tasks.list(a.status)));
-    case 'note_set':
+    case 'note_set': {
+      const err = a.value && a.schema ? schemaError(a.value, a.schema) : undefined;
+      if (err) return text(`rejected, note not written: ${err}`, true);
       notes.set(me, a.key, a.value);
       return text('ok');
+    }
     case 'note_get': {
       if (!a.key) return text(notes.list().map((n) => `${n.k} (${n.author}, ${n.v.length}c)`).join('\n') || '(no notes)');
       return text(notes.get(a.key) ?? '(missing)');
     }
+    case 'validate': {
+      const err = schemaError(notes.get(a.key), a.schema);
+      return text(err ? `FAIL ${a.key}: ${err}` : `ok: ${a.key} matches ${a.schema}`, !!err);
+    }
     case 'spawn': {
-      const parent = agents.get(me);
-      const r = startAgent({ prompt: a.prompt, name: a.name, role: a.role, model: a.model ?? 'haiku', cwd: a.cwd ?? parent?.cwd ?? undefined,
-        headless: !!a.headless, effort: ['low', 'medium', 'high'].includes(a.effort) ? a.effort : undefined, parent: me, workspace: parent?.workspace ?? undefined });
-      return text(r.agent ? `spawned ${r.agent.name}${a.headless ? ' (headless; result will be mailed to you)' : ' (pane)'}` : 'spawned shell');
+      const parent = agents.get(me), wf = workflow();
+      // No model and no workflow role: cheapest worker, as before.
+      const r = await startAgent({ prompt: a.prompt, name: a.name, role: a.role, model: a.model ?? (tierFor(a.role) ? undefined : 'haiku'), cwd: a.cwd ?? parent?.cwd ?? undefined,
+        headless: !!a.headless, effort: EFFORTS.includes(a.effort) ? a.effort : undefined, worktree: a.worktree, parent: me, workspace: parent?.workspace ?? undefined });
+      if (!r.agent) return text('spawned shell');
+      const out = [`spawned ${r.agent.name} [${r.agent.model ?? '?'}${r.effort ? `/${r.effort}` : ''}]${a.headless ? ' (headless; result will be mailed to you)' : ' (pane)'}`];
+      if (r.worktree) out.push(`worktree ${r.worktree.path} on branch ${r.worktree.branch}${r.worktree.dirty ? ' (your uncommitted changes are NOT in it: it starts from HEAD)' : ''}`);
+      if (r.warn) out.push(`warning: ${r.warn}`);
+      const live = agents.list().filter((x) => x.parent === me && x.status !== 'offline').length;
+      if (live >= wf.warnAt) {
+        out.push(`warning: ${live} live workers (threshold ${wf.warnAt}); integrate results before spawning more.`);
+        if (live === wf.warnAt) messages.send('hub', 'human', `⚠ ${me} a ${live} workers actifs (seuil ${wf.warnAt}).`);
+      }
+      return text(out.join('\n'));
     }
     case 'stop':
       if (!agents.get(a.name)) return text(`no such agent ${a.name}`, true);

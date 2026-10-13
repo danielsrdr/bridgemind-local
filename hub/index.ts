@@ -11,7 +11,7 @@ import { WebSocketServer, type WebSocket } from 'ws';
 import { all, run, kvGet, kvSet, DATA_DIR } from './db.ts';
 import { agents, messages, tasks, notes, events } from './bus.ts';
 import { ptys } from './pty.ts';
-import { PORT, HUB, profiles, startAgent, stopAgent, claudeBin, isDir, runRoutineOnce, type Profile } from './agents.ts';
+import { PORT, HUB, profiles, startAgent, stopAgent, claudeBin, isDir, runRoutineOnce, workflow, setWorkflow, type Profile } from './agents.ts';
 import { handleHook } from './hooks.ts';
 import { handleMcp } from './mcp.ts';
 import { listThreads, readThread } from './transcripts.ts';
@@ -38,7 +38,7 @@ const workspaces = {
 
 const state = () => ({
   agents: agents.list(), terms: ptys.list(), tasks: tasks.list(), messages: messages.recent(300), notes: notes.list(),
-  profiles: profiles.list(), workspaces: workspaces.list(), routines: routinesView(), runs: recentRuns(),
+  profiles: profiles.list(), workspaces: workspaces.list(), routines: routinesView(), runs: recentRuns(), workflow: workflow(),
   settings: { claudePath: claudeBin(), hub: HUB, dataDir: DATA_DIR, lastWorkspace: kvGet('lastWorkspace', null), integrated: kvGet('integrated', false), dictation: dictationCfg() },
 });
 
@@ -97,7 +97,7 @@ async function api(req: IncomingMessage, res: ServerResponse, url: URL, body: an
       if (m === 'DELETE') { profiles.del(b); return json(res, true); }
       break;
     case 'agents':
-      if (m === 'POST' && !b) return json(res, startAgent(body));
+      if (m === 'POST' && !b) return json(res, await startAgent(body));
       if (m === 'POST' && c === 'stop') { stopAgent(b); return json(res, true); }
       if (m === 'DELETE') { stopAgent(b); agents.remove(b); return json(res, true); }
       break;
@@ -120,7 +120,7 @@ async function api(req: IncomingMessage, res: ServerResponse, url: URL, body: an
       if (m === 'POST') { if (typeof body.k !== 'string' || !body.k) return json(res, { error: 'k required' }, 400); notes.set(HUMAN, body.k, String(body.v ?? '')); return json(res, true); }
       break;
     case 'terms':
-      if (m === 'POST') return json(res, startAgent({ ...body, profile: body.profile ?? 'shell' }).term);
+      if (m === 'POST') return json(res, (await startAgent({ ...body, profile: body.profile ?? 'shell' })).term);
       if (m === 'DELETE') { const t = ptys.get(b); if (t?.agent) stopAgent(t.agent); ptys.kill(b); return json(res, true); }
       break;
     case 'routines':
@@ -128,6 +128,7 @@ async function api(req: IncomingMessage, res: ServerResponse, url: URL, body: an
       if (m === 'POST') { const r: Routine = { enabled: true, ...body, id: body.id || randomUUID().slice(0, 8) }; routines.put(r); schedule(r); return json(res, r); }
       if (m === 'DELETE') { stopRoutine(b); routines.del(b); return json(res, true); }
       break;
+    case 'workflow': return json(res, m === 'POST' ? setWorkflow(body) : workflow());
     case 'runs': return json(res, recentRuns());
     case 'threads':
       if (!b) return json(res, listThreads());

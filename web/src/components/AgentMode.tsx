@@ -1,21 +1,34 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useS, api } from '../store';
 import { ago, fmtTok, FolderPicker, Modal, shortPath } from './ui';
-import type { Routine } from '../types';
+import type { Routine, Tier } from '../types';
 
 const PRESETS = [
   ['Chaque matin (9h, lun-ven)', '0 9 * * 1-5'], ['Toutes les heures', '0 * * * *'], ['Tous les jours minuit', '0 0 * * *'], ['Toutes les 15 min', '*/15 * * * *'],
 ];
 
-export function missionPrompt(goal: string, workerModel: string, maxWorkers: number) {
+type TierKey = 'lead' | 'scan' | 'validate' | 'refactor';
+const ROWS: [TierKey, string][] = [['lead', 'Lead · planifie & livre'], ['scan', 'Scan · balayage'], ['validate', 'Validation · filtre + schéma'], ['refactor', 'Refactor · worktree git']];
+const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
+const DEFAULT_TIERS: Record<TierKey, Tier> = {
+  lead: { profile: 'opus', effort: 'high' }, scan: { profile: 'haiku', effort: 'low' }, validate: { profile: 'haiku', effort: 'low' }, refactor: { profile: 'sonnet', effort: 'medium', worktree: true },
+};
+/** Server tiers win per key; missing keys fall back to the defaults. */
+const tiersFrom = (t?: Record<string, Tier>): Record<TierKey, Tier> => ({
+  lead: { ...DEFAULT_TIERS.lead, ...t?.lead }, scan: { ...DEFAULT_TIERS.scan, ...t?.scan }, validate: { ...DEFAULT_TIERS.validate, ...t?.validate }, refactor: { ...DEFAULT_TIERS.refactor, ...t?.refactor },
+});
+
+export function missionPrompt(goal: string, maxWorkers: number) {
   return `MISSION: ${goal}
 
-You lead this mission. Protocol:
-1. Inspect only what you need, then write the plan to note "plan" (short, numbered).
-2. Split into independent tasks (task_add, with deps when ordered).
-3. Delegate: spawn up to ${maxWorkers} workers (model "${workerModel}"). Use headless:true for self-contained tasks; give each a precise prompt naming its task id, files, and acceptance criteria. Keep architecture/critical decisions yourself.
-4. Integrate results, run the checks (build/tests), fix gaps.
-5. Finish with send(to:"human") — a 5-line summary: what changed, how verified, open issues.`;
+You lead this mission: plan, decide, merge, ship. The hub routes spawn(role) to the right model and effort, so don't pass model.
+1. Plan: inspect only what you need, write note "plan" (short, numbered), split into tasks (task_add, deps when ordered). For a sweep or refactor, put the candidate JSON Schema in note "schema/candidates".
+2. Scan: spawn(role:"scan", headless:true), one per slice of files, in parallel. Each extracts candidates (file, symbol, change) with note_set("cand/<name>", json, schema:"schema/candidates"). No edits.
+3. Validate: spawn(role:"validate", headless:true) drops false positives and malformed entries, then writes note "cand/ok" (schema-checked). Skip steps 2-3 when there is nothing to sweep.
+4. Refactor: spawn(role:"refactor", headless:true), one per independent group of changes. Each works in its own git worktree and commits on its branch. Commit your own pending changes first, because worktrees start from HEAD.
+5. Ship: validate(key:"cand/ok", schema:"schema/candidates") must pass before you merge a multi-file refactor. Merge the branches, run build/tests, fix gaps, then remove the worktrees.
+At most ${maxWorkers} workers live at once. Every worker prompt names its task id, files, notes and acceptance criteria.
+6. Finish with send(to:"human"): a 5-line summary of what changed, how you verified it, and open issues.`;
 }
 
 export function AgentMode() {
@@ -31,25 +44,39 @@ export function AgentMode() {
 }
 
 function Mission() {
-  const { ws, workspaces, profiles } = useS();
+  const { ws, workspaces, profiles, workflow } = useS();
   const w = workspaces.find((x) => x.id === ws);
   const claude = profiles.filter((p) => p.kind === 'claude');
-  const [o, setO] = useState({ goal: '', lead: 'opus', worker: 'haiku', max: 3, cwd: w?.folders[0] ?? '' });
+  const [o, setO] = useState({ goal: '', max: 3, cwd: w?.folders[0] ?? '' });
+  const [tiers, setTiers] = useState<Record<TierKey, Tier>>(() => tiersFrom(workflow?.tiers));
   const [pick, setPick] = useState(false);
+  // The workflow may arrive after mount (snapshot or websocket event): adopt it.
+  useEffect(() => { if (workflow) setTiers(tiersFrom(workflow.tiers)); }, [workflow]);
+  const setTier = (k: TierKey, patch: Partial<Tier>) => setTiers({ ...tiers, [k]: { ...tiers[k], ...patch } });
   const go = async () => {
     const max = Math.min(8, Math.max(1, Math.round(o.max) || 1)); // empty/invalid number input gave 0 or NaN workers
-    const r = await api('agents', 'POST', { name: 'lead', role: 'lead', profile: o.lead, cwd: o.cwd || w?.folders[0], workspace: ws, prompt: missionPrompt(o.goal, o.worker, max) });
+    await api('workflow', 'POST', { tiers });
+    const r = await api('agents', 'POST', { name: 'lead', role: 'lead', profile: tiers.lead.profile, effort: tiers.lead.effort, cwd: o.cwd || w?.folders[0], workspace: ws, prompt: missionPrompt(o.goal, max) });
     if (r?.term) useS.setState({ mode: 'code', focus: r.term.id, dock: 'team' });
   };
   return (
     <section>
       <h2 className="text-lg font-semibold mb-1">Mission multi-agent</h2>
-      <p className="text-mute text-xs mb-3">Un lead planifie, découpe en tâches, délègue à des workers moins chers et intègre. Tout passe par le bus local (messages, tâches, notes) — visible dans le panneau Équipe.</p>
+      <p className="text-mute text-xs mb-3">Opus planifie et livre, Haiku balaie et filtre, Sonnet refactorise en worktree isolé. Tout passe par le bus local (messages, tâches, notes) — visible dans le panneau Équipe.</p>
       <div className="rounded-xl border border-line bg-panel p-4 grid gap-3">
         <textarea className="inp h-24 resize-y text-[13px]" placeholder="Objectif… ex: Ajoute l'auth JWT à l'API, avec tests, et documente-la." value={o.goal} onChange={(e) => setO({ ...o, goal: e.target.value })} />
-        <div className="grid grid-cols-4 gap-2 items-end">
-          <label><div className="lbl mb-1">Lead</div><select className="inp" value={o.lead} onChange={(e) => setO({ ...o, lead: e.target.value })}>{claude.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
-          <label><div className="lbl mb-1">Workers</div><select className="inp" value={o.worker} onChange={(e) => setO({ ...o, worker: e.target.value })}>{claude.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
+        <div className="grid gap-1.5">
+          <div className="grid grid-cols-[minmax(0,2fr)_1fr_1fr_auto] gap-2 lbl"><span>Rôle</span><span>Profil</span><span>Effort</span><span>Worktree</span></div>
+          {ROWS.map(([k, label]) => (
+            <div key={k} className="grid grid-cols-[minmax(0,2fr)_1fr_1fr_auto] gap-2 items-center text-xs">
+              <span className="truncate">{label}</span>
+              <select className="inp" value={tiers[k].profile} onChange={(e) => setTier(k, { profile: e.target.value })}>{claude.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select>
+              <select className="inp" value={tiers[k].effort ?? ''} onChange={(e) => setTier(k, { effort: e.target.value || undefined })}><option value="">défaut</option>{EFFORTS.map((e) => <option key={e} value={e}>{e}</option>)}</select>
+              {k === 'refactor' ? <label className="flex items-center gap-1.5 text-mute px-1"><input type="checkbox" checked={!!tiers.refactor.worktree} onChange={(e) => setTier('refactor', { worktree: e.target.checked })} />worktree</label> : <span className="w-4" />}
+            </div>
+          ))}
+        </div>
+        <div className="grid grid-cols-[10rem_1fr] gap-2 items-end">
           <label><div className="lbl mb-1">Max workers</div><input type="number" min={1} max={8} className="inp" value={o.max} onChange={(e) => setO({ ...o, max: +e.target.value })} /></label>
           <button className="btn justify-center" onClick={() => setPick(!pick)} title={o.cwd}>📁 {shortPath(o.cwd) || 'dossier'}</button>
         </div>
@@ -91,7 +118,7 @@ function Routines() {
 }
 
 function RoutineEditor({ r, onSave, onClose }: { r: Partial<Routine>; onSave: (r: Partial<Routine>) => void; onClose: () => void }) {
-  const profiles = useS((s) => s.profiles.filter((p) => p.kind === 'claude'));
+  const profiles = useS((s) => s.profiles).filter((p) => p.kind === 'claude'); // filter outside: a fresh array from the selector loops forever (zustand 5)
   const [o, setO] = useState(r);
   const [pick, setPick] = useState(false);
   return (

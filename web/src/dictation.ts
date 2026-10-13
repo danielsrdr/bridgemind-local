@@ -1,7 +1,7 @@
 // Overlay renderer for system-wide dictation (driven by electron/dictation.cjs over IPC).
-import { loadAsr, record, toMono16k, transcribe } from './asr';
+import { AsrTimeout, loadAsr, record, toMono16k, transcribe } from './asr';
 
-declare const dict: { on(ev: string, fn: (a?: any) => void): void; result(t: string): void; error(m: string): void };
+declare const dict: { on(ev: string, fn: (a?: any) => void): void; result(t: string): void; error(m: string): void; transcribed(r: object): void };
 
 const pill = document.getElementById('pill')!, txt = document.getElementById('txt')!, bars = document.getElementById('bars')!;
 for (let i = 0; i < 7; i++) bars.appendChild(document.createElement('i'));
@@ -23,6 +23,11 @@ dict.on('config', (c) => {
   // One silent pass also compiles the GPU shaders.
   if (!warmed) { warmed = true; setTimeout(() => loadAsr(cfg.model).then(() => transcribe(new Float32Array(16000), cfg.model, cfg.language)).catch(() => (warmed = false)), 4000); }
 });
+// In-app dictation from the main window: same model, same queue as the global hotkey.
+dict.on('transcribe', async ({ id, audio }: { id: number; audio: Float32Array }) => {
+  try { dict.transcribed({ id, text: await transcribe(audio, cfg.model, cfg.language) }); }
+  catch (e: any) { dict.transcribed({ id, error: String(e?.message ?? e), timeout: e instanceof AsrTimeout }); }
+});
 dict.on('start', () => {
   ui('', 'Écoute…');
   cur?.stop(); cur = null; // a stale session must not keep the mic open
@@ -39,5 +44,5 @@ dict.on('stop', async () => {
     ui('busy', warmed ? 'Transcription…' : 'Chargement du modèle…');
     const text = await transcribe(await toMono16k(blob), cfg.model, cfg.language);
     dict.result(text);
-  } catch (e: any) { ui('err', 'Erreur de transcription'); dict.error(String(e)); }
+  } catch (e: any) { ui('err', e instanceof AsrTimeout ? 'Délai dépassé' : 'Erreur de transcription'); dict.error(String(e)); }
 });

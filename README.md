@@ -35,7 +35,7 @@ Prérequis : Node ≥ 24 et Claude Code connecté une fois. Le CLI est détecté
 |---|---|
 | **Code** (Ctrl+2) | Grille de vrais terminaux (ConPTY) par workspace. Un clic lance Opus / Sonnet / Haiku / Local / PowerShell. Panes redimensionnables, *Tidy*, maximiser (Ctrl+Shift+M), navigation Ctrl+Alt+flèches, nouveau pane Ctrl+Shift+T. |
 | **Thread** (Ctrl+3) | Toutes tes sessions Claude Code (CLI, appli desktop, panes) en conversation lisible : prompts, outils, diffs, résultats, tokens. Reprendre dans un pane, ou continuer en headless. |
-| **Agent** (Ctrl+1) | **Missions** (un lead planifie et délègue à N workers) + **routines** cron (brief headless planifié) + historique des runs (tokens, durée). |
+| **Agent** (Ctrl+1) | **Missions** (un lead planifie et délègue à N workers, workflow Opus → Haiku → Sonnet configurable par rôle) + **routines** cron (brief headless planifié) + historique des runs (tokens, durée). |
 
 Panneau **Équipe** (Ctrl+B) : agents en direct (● idle, ● working, ● en attente de permission), fil de messages (tu y participes en tant que `human`), tableau de tâches, notes partagées.
 **Navigateur** : aperçu localhost docké à droite.
@@ -55,7 +55,7 @@ Mesuré sur l'Arc 130V : environ 2 s pour une phrase en small, 1 s en base.
 
 Chaque agent lancé par BridgeMind est un vrai `claude` interactif (ou headless), câblé automatiquement :
 
-- **MCP `bridge`** (HTTP, un seul serveur partagé) : `send`, `inbox`, `agents`, `task_add/claim/done`, `tasks`, `note_set/get`, `spawn`, `stop`.
+- **MCP `bridge`** (HTTP, un seul serveur partagé) : `send`, `inbox`, `agents`, `task_add/claim/done`, `tasks`, `note_set/get`, `validate`, `spawn`, `stop`.
 - **Hooks HTTP** : statut en direct et **livraison push des messages, sans polling** :
   - agent en plein travail → les messages arrivent après son prochain appel d'outil (`PostToolUse`) ;
   - agent qui termine → son arrêt est bloqué et il reçoit les messages (`Stop`) ;
@@ -73,6 +73,9 @@ Détails : [docs/PROTOCOL.md](docs/PROTOCOL.md).
 | Workers `spawn(headless)` en haiku | résultat renvoyé en message ; au-delà de 1 500 caractères, il va dans une note (le parent ne le paie que s'il le lit) |
 | Résultat dédoublonné | un worker qui a fait `task_done` n'envoie pas en plus son résultat final |
 | `inbox(wait)` long-poll + hooks push | zéro tour gaspillé à attendre |
+| Routage par rôle | Haiku low pour balayer/filtrer, Sonnet medium pour refactoriser, Opus high pour planifier/livrer |
+| Prompt système identique pour tous les workers headless + démarrages espacés | cache partagé entre workers |
+| Validation JSON Schema déterministe dans le hub (`validate` / `note_set` schema) | zéro token |
 
 Même tâche headless : 167k → 58k tokens (−65 %), 2× plus rapide.
 

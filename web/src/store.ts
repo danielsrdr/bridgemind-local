@@ -1,13 +1,13 @@
 // Client state: snapshot from /api/state, then kept live by websocket events.
 import { create } from 'zustand';
-import type { Agent, Message, Task, Note, Profile, Workspace, Term, Routine, Run, Settings } from './types';
+import type { Agent, Message, Task, Note, Profile, Workspace, Term, Routine, Run, Settings, Workflow } from './types';
 
 export type Mode = 'agent' | 'code' | 'board' | 'thread';
 
 interface S {
   ready: boolean; connected: boolean; mode: Mode;
   agents: Agent[]; terms: Term[]; tasks: Task[]; messages: Message[]; notes: Note[];
-  profiles: Profile[]; workspaces: Workspace[]; routines: Routine[]; runs: Run[]; settings: Settings;
+  profiles: Profile[]; workspaces: Workspace[]; routines: Routine[]; runs: Run[]; settings: Settings; workflow: Workflow | null;
   ws: string | null; // active workspace id
   focus: string | null; // focused term id
   dock: 'team' | 'browser' | null;
@@ -19,7 +19,7 @@ interface S {
 const ls = (k: string, d: any) => { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch { return d; } };
 export const useS = create<S>((set) => ({
   ready: false, connected: false, mode: ls('bm.mode', 'code'),
-  agents: [], terms: [], tasks: [], messages: [], notes: [], profiles: [], workspaces: [], routines: [], runs: [], settings: {} as Settings,
+  agents: [], terms: [], tasks: [], messages: [], notes: [], profiles: [], workspaces: [], routines: [], runs: [], settings: {} as Settings, workflow: null,
   ws: null, focus: null, dock: ls('bm.dock', 'team'), browserUrl: ls('bm.url', 'http://localhost:3000'), settingsOpen: false,
   set: (p) => set(p),
 }));
@@ -89,6 +89,7 @@ export function connect() {
       case 'note': return useS.setState({ notes: upsert(s.notes, d, 'k') });
       case 'note:remove': return useS.setState({ notes: s.notes.filter((n) => n.k !== d) });
       case 'settings': return useS.setState({ settings: d });
+      case 'workflow': return useS.setState({ workflow: d });
       case 'run': return useS.setState({ runs: upsert(s.runs, d, 'id').sort((a, b) => b.id - a.id) });
     }
   };

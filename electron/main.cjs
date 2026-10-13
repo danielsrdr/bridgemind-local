@@ -7,7 +7,7 @@ const { existsSync, mkdirSync, openSync, readFileSync, writeFileSync } = require
 const http = require('node:http');
 const os = require('node:os');
 // Dictation is optional: a failing native module (uiohook-napi) must not take the whole app down.
-let dictation = { init() {}, setConfig() {}, dispose() {} };
+let dictation = { init() {}, setConfig() {}, dispose() {}, transcribe: async () => null };
 try { dictation = require('./dictation.cjs'); } catch (e) { console.error('dictation unavailable:', e); }
 
 const PORT = Number(process.env.BRIDGE_PORT || 7777);
@@ -118,6 +118,7 @@ function createTray() {
 
 const getJson = (path) => new Promise((ok) => http.get(HUB + path, (res) => { let b = ''; res.on('data', (c) => (b += c)); res.on('end', () => { try { ok(JSON.parse(b)); } catch { ok(null); } }); }).on('error', () => ok(null)));
 ipcMain.handle('dictation-config', (_e, c) => dictation.setConfig(c));
+ipcMain.handle('dictation-transcribe', (_e, audio) => dictation.transcribe(audio));
 
 ipcMain.handle('titlebar-theme', (_e, t) => { try { win?.setTitleBarOverlay(t); } catch {} });
 

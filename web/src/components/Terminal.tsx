@@ -43,7 +43,7 @@ export function Terminal({ id, focused, onFocus }: { id: string; focused: boolea
   }, [id]);
 
   useEffect(() => { if (focused) term.current?.focus(); }, [focused]);
-  return <div ref={el} className="h-full w-full min-h-0" onMouseDown={onFocus} />;
+  return <div ref={el} data-term={id} className="h-full w-full min-h-0" onMouseDown={onFocus} />;
 }
 
 /** Imperative helper: type into a pane (used by voice + quick prompts). */

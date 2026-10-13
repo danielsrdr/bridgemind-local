@@ -43,7 +43,8 @@ export function handleHook(event: string, agentParam: string | null, body: any):
       return {};
     case 'PostToolUse':
       if (a.status !== 'working') agents.upsert({ name, ...base, status: 'working' });
-      return inject('PostToolUse', name);
+      // Fired inside an in-process subagent (Agent tool): keep the mail for the main agent, the subagent would swallow it.
+      return body?.agent_id ? {} : inject('PostToolUse', name);
     case 'Notification':
       if (body?.notification_type === 'auth_success') return {}; // not a human-attention prompt
       // idle_prompt = merely sitting at the prompt; only permission/elicitation prompts need the human.

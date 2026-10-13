@@ -13,9 +13,12 @@ const HOTKEYS = {
 const MODS = [[K.Ctrl, K.CtrlRight], [K.Alt, K.AltRight], [K.Shift, K.ShiftRight], [K.Meta, K.MetaRight]];
 const MOD_KEYS = new Set(MODS.flat());
 const W = 260, H = 54;
+const MAX_REC_MS = 5 * 60e3; // a missed keyup must not record forever
+const MAX_BUSY_MS = 9 * 60e3; // > renderer timeouts (model load 5 min + transcription 3 min): last-resort reset
 
 let cfg = { enabled: true, hotkey: 'ctrl+win', model: 'onnx-community/whisper-small', language: 'french', autoEnter: false };
-let overlay = null, hub = '', down = new Set(), state = 'idle', aborted = false, started = false, inited = false;
+let overlay = null, hub = '', down = new Set(), state = 'idle', aborted = false, started = false, inited = false, timer = null;
+const disarm = () => { clearTimeout(timer); timer = null; };
 
 const alive = () => !!overlay && !overlay.isDestroyed();
 // Overlay follows the cursor's display (not always the primary one).
@@ -38,7 +41,9 @@ function createOverlay() {
   overlay.webContents.once('did-finish-load', () => overlay.webContents.send('dict:config', cfg));
   // Renderer crashed mid-session: drop the stuck state and rebuild the overlay.
   overlay.webContents.on('render-process-gone', () => {
-    const o = overlay; overlay = null; state = 'idle';
+    const o = overlay; overlay = null; state = 'idle'; disarm();
+    for (const [id, p] of pending) { clearTimeout(p.t); p.ok({ id, error: 'overlay crashed' }); }
+    pending.clear();
     setTimeout(() => { try { o.destroy(); } catch {} createOverlay(); }, 1000);
   });
 }
@@ -59,12 +64,20 @@ function start() {
   place();
   overlay.showInactive(); // never steal focus from the app we will paste into
   overlay.webContents.send('dict:start');
+  disarm(); timer = setTimeout(() => stop(false), MAX_REC_MS);
 }
 function stop(cancel) {
   if (state !== 'rec' || !alive()) return;
   state = cancel ? 'idle' : 'busy';
   overlay.webContents.send(cancel ? 'dict:cancel' : 'dict:stop');
+  disarm();
   if (cancel) overlay.hide();
+  // The renderer never answered (GPU hang…): unblock dictation and restart the overlay page.
+  else timer = setTimeout(() => {
+    if (state !== 'busy') return;
+    state = 'idle'; aborted = true;
+    if (alive()) { overlay.hide(); overlay.webContents.reload(); }
+  }, MAX_BUSY_MS);
 }
 
 async function paste(text) {
@@ -92,12 +105,27 @@ async function paste(text) {
 }
 
 ipcMain.on('dict:result', (_e, text) => {
-  state = 'idle';
+  if (state !== 'busy') return; // late answer after the watchdog reset: drop it
+  state = 'idle'; disarm();
   if (alive()) overlay.hide();
   text = String(text || '').trim();
   if (text && !aborted) paste(text + ' ');
 });
-ipcMain.on('dict:error', () => { state = 'idle'; setTimeout(() => { if (alive()) overlay.hide(); }, 1500); });
+ipcMain.on('dict:error', () => { state = 'idle'; disarm(); setTimeout(() => { if (alive()) overlay.hide(); }, 1500); });
+
+// Transcription requests from the main window (in-app Ctrl+Space / 🎙), run by the overlay's model.
+let reqId = 0;
+const pending = new Map();
+ipcMain.on('dict:transcribed', (_e, r) => { const p = pending.get(r?.id); if (!p) return; pending.delete(r.id); clearTimeout(p.t); p.ok(r); });
+function transcribe(audio) {
+  if (!alive()) return Promise.resolve(null); // null: caller transcribes locally
+  const id = ++reqId;
+  return new Promise((ok) => {
+    const t = setTimeout(() => { pending.delete(id); ok({ id, error: 'Transcription: délai dépassé', timeout: true }); }, MAX_BUSY_MS);
+    pending.set(id, { ok, t });
+    overlay.webContents.send('dict:transcribe', { id, audio });
+  });
+}
 
 function setConfig(c) {
   cfg = { ...cfg, ...c };
@@ -133,4 +161,4 @@ function init(hubUrl, initial) {
 
 function dispose() { try { uIOhook.stop(); } catch {} }
 
-module.exports = { init, setConfig, dispose };
+module.exports = { init, setConfig, dispose, transcribe };
