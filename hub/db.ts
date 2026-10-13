@@ -32,7 +32,7 @@ export const run = (sql: string, ...p: any[]) => db.prepare(sql).run(...p);
 
 export function kvGet<T>(k: string, def: T): T {
   const r = get<{ v: string }>('SELECT v FROM kv WHERE k=?', k);
-  return r ? JSON.parse(r.v) : def;
+  try { return r ? JSON.parse(r.v) : def; } catch { return def; }
 }
 export function kvSet(k: string, v: unknown) {
   run('INSERT INTO kv(k,v) VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v', k, JSON.stringify(v));

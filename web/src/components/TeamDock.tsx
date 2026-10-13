@@ -53,8 +53,11 @@ function Team() {
   const [to, setTo] = useState('all');
   const [body, setBody] = useState('');
   const feed = useRef<HTMLDivElement>(null);
-  useEffect(() => { feed.current?.scrollTo({ top: 1e9 }); }, [msgs.length]);
-  const send = () => { if (!body.trim()) return; api('messages', 'POST', { to, body }); setBody(''); };
+  // the feed is capped at 500 messages, so the length stops changing: follow the last id instead
+  useEffect(() => { feed.current?.scrollTo({ top: 1e9 }); }, [msgs.at(-1)?.id]);
+  // a selected agent that went offline is no longer an option: fall back to 'all' instead of sending to it silently
+  const dest = to === 'all' || (to.startsWith('@') ? live.some((a) => a.role === to.slice(1)) : live.some((a) => a.name === to)) ? to : 'all';
+  const send = () => { if (!body.trim()) return; api('messages', 'POST', { to: dest, body }); setBody(''); };
   return (
     <div className="flex-1 min-h-0 flex flex-col">
       <div className="max-h-[45%] overflow-auto border-b border-line py-1 shrink-0">
@@ -73,7 +76,7 @@ function Team() {
         ))}
       </div>
       <div className="p-2 border-t border-line flex flex-col gap-1.5 shrink-0">
-        <select className="inp" value={to} onChange={(e) => setTo(e.target.value)}>
+        <select className="inp" value={dest} onChange={(e) => setTo(e.target.value)}>
           <option value="all">→ tous les agents actifs</option>
           {[...new Set(live.map((a) => a.role).filter(Boolean))].map((r) => <option key={r} value={`@${r}`}>→ @{r}</option>)}
           {live.map((a) => <option key={a.name} value={a.name}>→ {a.name}</option>)}
@@ -88,18 +91,21 @@ function Team() {
   );
 }
 
+const depsOf = (s: string | null) => { try { return JSON.parse(s || '[]') as unknown[]; } catch { return []; } };
+
 function Tasks() {
   const tasks = useS((s) => s.tasks);
   const agents = useS((s) => s.agents.filter((a) => a.status !== 'offline'));
   const [title, setTitle] = useState('');
   const [assignee, setAssignee] = useState('');
+  const who = agents.some((a) => a.name === assignee) ? assignee : ''; // an assignee that went offline reverts to 'libre'
   const cols = [['open', 'À faire'], ['claimed', 'En cours'], ['done', 'Fait'], ['failed', 'Échec']] as const;
   return (
     <div className="flex-1 min-h-0 flex flex-col">
       <div className="p-2 border-b border-line flex gap-1 shrink-0">
         <input className="inp" placeholder="Nouvelle tâche…" value={title} onChange={(e) => setTitle(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter' && title.trim()) { api('tasks', 'POST', { title, assignee }); setTitle(''); } }} />
-        <select className="inp w-28" value={assignee} onChange={(e) => setAssignee(e.target.value)}>
+          onKeyDown={(e) => { if (e.key === 'Enter' && title.trim()) { api('tasks', 'POST', { title, assignee: who }); setTitle(''); } }} />
+        <select className="inp w-28" value={who} onChange={(e) => setAssignee(e.target.value)}>
           <option value="">libre</option>{agents.map((a) => <option key={a.name}>{a.name}</option>)}
         </select>
       </div>
@@ -117,7 +123,7 @@ function Tasks() {
                     {st !== 'done' && <button className="opacity-0 group-hover:opacity-100 text-ok" title="Marquer fait" onClick={() => api(`tasks/${t.id}`, 'PATCH', { status: 'done', result: 'closed by human' })}>✓</button>}
                     <button className="opacity-0 group-hover:opacity-100 text-mute hover:text-bad" onClick={() => api(`tasks/${t.id}`, 'DELETE')}>✕</button>
                   </div>
-                  <div className="text-[10px] text-mute">{t.creator}{t.assignee ? ` → ${t.assignee}` : ''} · {ago(t.updated)}{JSON.parse(t.deps).length ? ` · deps ${t.deps}` : ''}</div>
+                  <div className="text-[10px] text-mute">{t.creator}{t.assignee ? ` → ${t.assignee}` : ''} · {ago(t.updated)}{depsOf(t.deps).length ? ` · deps ${t.deps}` : ''}</div>
                   {t.detail && <div className="text-[11px] text-mute mt-0.5 whitespace-pre-wrap">{t.detail}</div>}
                   {t.result && <div className="text-[11px] mt-1 border-l-2 border-ok/50 pl-1.5 whitespace-pre-wrap">{t.result}</div>}
                 </div>
@@ -136,7 +142,9 @@ function Notes() {
   const [sel, setSel] = useState<string | null>(null);
   const [k, setK] = useState(''); const [v, setV] = useState('');
   const cur = notes.find((n) => n.k === sel);
-  useEffect(() => { if (cur) { setK(cur.k); setV(cur.v); } }, [sel, cur?.ts]);
+  const dirty = useRef(false); // unsaved edits: a remote update of the same note must not overwrite them
+  useEffect(() => { dirty.current = false; if (cur) { setK(cur.k); setV(cur.v); } }, [sel]);
+  useEffect(() => { if (cur && !dirty.current) { setK(cur.k); setV(cur.v); } }, [cur?.ts]);
   return (
     <div className="flex-1 min-h-0 flex flex-col">
       <div className="max-h-[40%] overflow-auto border-b border-line py-1 shrink-0">
@@ -148,12 +156,12 @@ function Notes() {
         {!notes.length && <div className="px-3 py-2 text-mute text-xs">Tableau partagé : specs, décisions, résultats. Les agents y écrivent au lieu de se renvoyer de longs textes.</div>}
       </div>
       <div className="flex-1 flex flex-col gap-1.5 p-2 min-h-0">
-        <input className="inp font-mono" placeholder="clé (ex: spec/api)" value={k} onChange={(e) => setK(e.target.value)} />
-        <textarea className="inp flex-1 font-mono resize-none" value={v} onChange={(e) => setV(e.target.value)} />
+        <input className="inp font-mono" placeholder="clé (ex: spec/api)" value={k} onChange={(e) => { dirty.current = true; setK(e.target.value); }} />
+        <textarea className="inp flex-1 font-mono resize-none" value={v} onChange={(e) => { dirty.current = true; setV(e.target.value); }} />
         <div className="flex gap-1 justify-end">
           {sel && <button className="btn" onClick={() => { api('notes', 'POST', { k: sel, v: '' }); setSel(null); setK(''); setV(''); }}>Supprimer</button>}
           <button className="btn" onClick={() => { setSel(null); setK(''); setV(''); }}>Nouvelle</button>
-          <button className="btn-p" disabled={!k} onClick={() => { api('notes', 'POST', { k, v }); setSel(k); }}>Enregistrer</button>
+          <button className="btn-p" disabled={!k} onClick={() => { dirty.current = false; api('notes', 'POST', { k, v }); setSel(k); }}>Enregistrer</button>
         </div>
       </div>
     </div>

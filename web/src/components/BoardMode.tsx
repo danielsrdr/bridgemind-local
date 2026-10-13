@@ -29,6 +29,7 @@ export function BoardMode() {
   const [wsFilter, setWsFilter] = useState('');
   const [sel, setSel] = useState<string | null>(null);
   const [view, setView] = useState({ x: 0, y: 0, k: 0.85 });
+  const viewRef = useRef(view); viewRef.current = view; // read by the window mouse listeners, which are registered once
   const [, setFrame] = useState(0);
   const box = useRef<HTMLDivElement>(null);
   const nodes = useRef(new Map<string, N>());
@@ -51,7 +52,7 @@ export function BoardMode() {
       if (p) links.push({ source: p, target: a.name, kind: 'parent' });
     }
     return { ns, links, key: ns.map((n) => n.id + n.ws).join() + '|' + links.map((l) => l.source + l.target).join() };
-  }, [visAgents.map((a) => a.name + a.parent + a.status).join(), shells.map((t) => t.id).join(), wsFilter]);
+  }, [visAgents.map((a) => a.name + a.parent + a.status + wsOf(a)).join(), shells.map((t) => t.id + t.workspace).join(), wsFilter]);
 
   // workspace cluster centers on a ring around you
   const clusters = useMemo(() => {
@@ -110,7 +111,7 @@ export function BoardMode() {
     };
     raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
-  }, [messages.length]);
+  }, [messages.at(-1)?.id]);
 
   // ---------- view: pan / zoom / fit ----------
   const fit = () => {
@@ -125,9 +126,8 @@ export function BoardMode() {
   useEffect(() => { const t = setTimeout(fit, 900); return () => clearTimeout(t); }, [graph.ns.length]);
   useEffect(() => { const ro = new ResizeObserver(() => fit()); if (box.current) ro.observe(box.current); return () => ro.disconnect(); }, []);
   const onWheel = (e: React.WheelEvent) => {
-    const r = box.current!.getBoundingClientRect(), mx = e.clientX - r.left, my = e.clientY - r.top;
-    const k = Math.min(2.5, Math.max(0.15, view.k * Math.exp(-e.deltaY * 0.0015)));
-    setView({ k, x: mx - ((mx - view.x) / view.k) * k, y: my - ((my - view.y) / view.k) * k });
+    const r = box.current!.getBoundingClientRect(), mx = e.clientX - r.left, my = e.clientY - r.top, dy = e.deltaY;
+    setView((v) => { const k = Math.min(2.5, Math.max(0.15, v.k * Math.exp(-dy * 0.0015))); return { k, x: mx - ((mx - v.x) / v.k) * k, y: my - ((my - v.y) / v.k) * k }; });
   };
   const drag = useRef<{ kind: 'pan' | 'node'; id?: string; sx: number; sy: number; vx: number; vy: number; moved: boolean } | null>(null);
   const onDown = (e: React.MouseEvent, id?: string) => {
@@ -144,7 +144,8 @@ export function BoardMode() {
       else {
         const n = nodes.current.get(d.id!);
         const r = box.current!.getBoundingClientRect();
-        if (n) { n.fx = (e.clientX - r.left - view.x) / view.k; n.fy = (e.clientY - r.top - view.y) / view.k; sim.current?.alpha(0.2).restart(); }
+        const v = viewRef.current;
+        if (n) { n.fx = (e.clientX - r.left - v.x) / v.k; n.fy = (e.clientY - r.top - v.y) / v.k; sim.current?.alpha(0.2).restart(); }
       }
     };
     const up = () => {
@@ -156,10 +157,13 @@ export function BoardMode() {
     };
     addEventListener('mousemove', move); addEventListener('mouseup', up);
     return () => { removeEventListener('mousemove', move); removeEventListener('mouseup', up); };
-  }, [view]);
+  }, []);
+  useEffect(() => {
+    if (sel && sel !== HUMAN && !agents.some((a) => a.name === sel) && !terms.some((t) => `term:${t.id}` === sel)) setSel(null);
+  }, [sel, agents, terms]);
 
   // ---------- derived ----------
-  const pos = (id: string) => nodes.current.get(id) ?? nodes.current.get(HUMAN);
+  const pos = (id: string) => nodes.current.get(id); // undefined when the agent is not on the board: no particle or link to a fallback node
   const now = Date.now();
   const recent = messages.filter((m) => now - m.ts < 10 * 60e3);
   const chatter = new Map<string, number>();
@@ -239,7 +243,8 @@ export function BoardMode() {
             if (!p) return null;
             if (n.kind === 'human') return <HumanNode key={n.id} x={p.x!} y={p.y!} unread={messages.filter((m) => m.rcpt === HUMAN && !m.read).length} onDown={(e) => onDown(e, n.id)} />;
             if (n.kind === 'shell') { const t = terms.find((x) => `term:${x.id}` === n.id); return t ? <ShellNode key={n.id} t={t} x={p.x!} y={p.y!} sel={sel === n.id} onDown={(e) => onDown(e, n.id)} /> : null; }
-            const a = agents.find((x) => x.name === n.id)!;
+            const a = agents.find((x) => x.name === n.id);
+            if (!a) return null;
             return <AgentNode key={n.id} a={a} x={p.x!} y={p.y!} sel={sel === n.id} onDown={(e) => onDown(e, n.id)}
               unread={messages.filter((m) => m.rcpt === a.name && !m.read).length}
               task={tasks.find((t) => t.assignee === a.name && t.status === 'claimed')?.title} />;

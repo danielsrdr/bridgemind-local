@@ -15,9 +15,11 @@ function App() {
   useEffect(() => {
     const k = (e: KeyboardEvent) => {
       if (!e.ctrlKey || e.shiftKey || e.altKey) return;
+      // Ctrl+B / Ctrl+1..4 belong to the shell (readline, tmux, Claude Code) while a terminal pane has focus
+      if ((e.target as HTMLElement | null)?.closest?.('.xterm')) return;
       const m = ({ '1': 'agent', '2': 'code', '3': 'thread', '4': 'board' } as const)[e.key as '1'];
       if (m) { e.preventDefault(); set({ mode: m }); }
-      if (e.key === 'b') { e.preventDefault(); set({ dock: useS.getState().dock === 'team' ? null : 'team' }); }
+      if (e.key.toLowerCase() === 'b') { e.preventDefault(); set({ dock: useS.getState().dock === 'team' ? null : 'team' }); }
     };
     addEventListener('keydown', k, true);
     return () => removeEventListener('keydown', k, true);

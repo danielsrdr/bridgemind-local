@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import type { Status } from '../types';
 import { api } from '../store';
 
@@ -14,7 +14,9 @@ export const ago = (t: number) => {
 export const fmtTok = (n: number) => (n > 1e6 ? `${(n / 1e6).toFixed(1)}M` : n > 1e3 ? `${(n / 1e3).toFixed(1)}k` : String(n));
 
 export function Modal({ title, onClose, children, wide }: { title: string; onClose: () => void; children: ReactNode; wide?: boolean }) {
-  useEffect(() => { const k = (e: KeyboardEvent) => e.key === 'Escape' && onClose(); addEventListener('keydown', k); return () => removeEventListener('keydown', k); }, [onClose]);
+  // onClose is an inline arrow in callers: read it through a ref instead of re-binding the listener on every render
+  const close = useRef(onClose); close.current = onClose;
+  useEffect(() => { const k = (e: KeyboardEvent) => e.key === 'Escape' && close.current(); addEventListener('keydown', k); return () => removeEventListener('keydown', k); }, []);
   return (
     <div data-modal className="fixed inset-0 z-50 bg-black/60 grid place-items-center p-6" onMouseDown={onClose}>
       <div className={`bg-panel border border-line rounded-xl shadow-2xl w-full ${wide ? 'max-w-4xl' : 'max-w-lg'} max-h-[88vh] flex flex-col`} onMouseDown={(e) => e.stopPropagation()}>

@@ -34,10 +34,11 @@ function ThreadView({ id }: { id: string }) {
   const [t, setT] = useState<T | null>(null);
   const [prompt, setPrompt] = useState('');
   const [busy, setBusy] = useState(false);
-  const end = useRef<HTMLDivElement>(null);
+  const end = useRef<HTMLDivElement>(null), box = useRef<HTMLDivElement>(null), atEnd = useRef(true);
   const load = () => api<T>(`threads/${id}`).then(setT);
   useEffect(() => { load(); const i = setInterval(load, 4000); return () => clearInterval(i); }, [id]);
-  useEffect(() => { end.current?.scrollIntoView(); }, [t?.items.length]);
+  // follow new items only while the user is at the bottom; don't yank them while they read older turns
+  useEffect(() => { if (atEnd.current) end.current?.scrollIntoView(); }, [t?.items.length]);
   if (!t) return null;
   const ws = useS.getState().ws;
   const resume = async () => {
@@ -46,8 +47,8 @@ function ThreadView({ id }: { id: string }) {
   };
   const headless = async () => {
     setBusy(true);
-    await api('agents', 'POST', { headless: true, resume: id, cwd: t.meta.cwd, prompt, name: 'thread', parent: 'human' });
-    setPrompt(''); setBusy(false);
+    try { await api('agents', 'POST', { headless: true, resume: id, cwd: t.meta.cwd, prompt, name: 'thread', parent: 'human' }); setPrompt(''); }
+    catch (e) { console.error(e); } finally { setBusy(false); }
   };
   const u = t.usage;
   return (
@@ -57,7 +58,7 @@ function ThreadView({ id }: { id: string }) {
         <span className="text-mute text-[11px] shrink-0">{t.model} · in {fmtTok(u.input)} · out {fmtTok(u.output)} · cache {fmtTok(u.cacheRead)}</span>
         <button className="btn ml-auto" onClick={resume}>↻ Reprendre dans un pane</button>
       </div>
-      <div className="flex-1 overflow-auto px-6 py-4 space-y-2 max-w-5xl w-full mx-auto">
+      <div ref={box} onScroll={() => { const b = box.current!; atEnd.current = b.scrollHeight - b.scrollTop - b.clientHeight < 80; }} className="flex-1 overflow-auto px-6 py-4 space-y-2 max-w-5xl w-full mx-auto">
         {t.items.map((it, i) => <Entry key={i} it={it} />)}
         <div ref={end} />
       </div>
@@ -76,19 +77,19 @@ function Entry({ it }: { it: Item }) {
   if (it.k === 'text') return <div className="text-[13px] whitespace-pre-wrap leading-relaxed">{it.t}</div>;
   if (it.k === 'thinking') return <details className="text-xs text-mute"><summary className="cursor-pointer">💭 réflexion</summary><div className="whitespace-pre-wrap mt-1">{it.t}</div></details>;
   if (it.k === 'result') return open
-    ? <pre onClick={() => setOpen(false)} className={`text-[11px] font-mono whitespace-pre-wrap rounded-md bg-bg border px-2 py-1.5 max-h-80 overflow-auto ${it.err ? 'border-bad/50' : 'border-line'}`}>{it.t}</pre>
-    : <div onClick={() => setOpen(true)} className={`text-[11px] font-mono cursor-pointer truncate pl-4 ${it.err ? 'text-bad' : 'text-mute'}`}>↳ {it.t.split('\n')[0].slice(0, 160) || '(vide)'}</div>;
-  // tool use
-  const inp = it.input ?? {};
-  if ((it.tool === 'Edit' || it.tool === 'MultiEdit') && (inp.old_string !== undefined || inp.edits)) {
-    const edits = inp.edits ?? [{ old_string: inp.old_string, new_string: inp.new_string }];
+    ? <pre onClick={() => setOpen(false)} className={`text-[11px] font-mono whitespace-pre-wrap rounded-md bg-bg border px-2 py-1.5 max-h-80 overflow-auto ${it.err ? 'border-bad/50' : 'border-line'}`}>{String(it.t ?? '')}</pre>
+    : <div onClick={() => setOpen(true)} className={`text-[11px] font-mono cursor-pointer truncate pl-4 ${it.err ? 'text-bad' : 'text-mute'}`}>↳ {String(it.t ?? '').split('\n')[0].slice(0, 160) || '(vide)'}</div>;
+  // tool use: inputs are arbitrary JSON, so only render strings (objects as React children crash the thread view)
+  const inp = it.input && typeof it.input === 'object' ? it.input : {};
+  if ((it.tool === 'Edit' || it.tool === 'MultiEdit') && (inp.old_string !== undefined || Array.isArray(inp.edits))) {
+    const edits: any[] = Array.isArray(inp.edits) ? inp.edits : [{ old_string: inp.old_string, new_string: inp.new_string }];
     return (
       <div className="rounded-md border border-line overflow-hidden text-[11px] font-mono">
-        <div className="px-2 py-1 bg-panel2 text-mute">✎ {inp.file_path}</div>
+        <div className="px-2 py-1 bg-panel2 text-mute">✎ {String(inp.file_path ?? '')}</div>
         {edits.map((e: any, i: number) => (
           <div key={i} className="max-h-72 overflow-auto">
-            {String(e.old_string ?? '').split('\n').map((l, j) => <div key={'o' + j} className="bg-bad/10 text-bad/90 px-2 whitespace-pre">- {l}</div>)}
-            {String(e.new_string ?? '').split('\n').map((l, j) => <div key={'n' + j} className="bg-ok/10 text-ok/90 px-2 whitespace-pre">+ {l}</div>)}
+            {String(e?.old_string ?? '').split('\n').map((l, j) => <div key={'o' + j} className="bg-bad/10 text-bad/90 px-2 whitespace-pre">- {l}</div>)}
+            {String(e?.new_string ?? '').split('\n').map((l, j) => <div key={'n' + j} className="bg-ok/10 text-ok/90 px-2 whitespace-pre">+ {l}</div>)}
           </div>
         ))}
       </div>
@@ -98,7 +99,7 @@ function Entry({ it }: { it: Item }) {
   return (
     <div className="text-[11px] font-mono rounded-md bg-panel border border-line px-2 py-1 cursor-pointer" onClick={() => setOpen(!open)}>
       <span className="text-accent">{(it.tool ?? '').replace(/^mcp__bridge__/, '⇄ ')}</span> <span className="text-mute">{String(arg).slice(0, open ? 1e5 : 200)}</span>
-      {open && inp.content && <pre className="whitespace-pre-wrap mt-1 max-h-72 overflow-auto">{inp.content}</pre>}
+      {open && inp.content != null && <pre className="whitespace-pre-wrap mt-1 max-h-72 overflow-auto">{String(inp.content)}</pre>}
     </div>
   );
 }

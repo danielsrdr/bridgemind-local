@@ -28,8 +28,9 @@ export const agents = {
   bySession: (sid: string) => get<Agent>('SELECT * FROM agents WHERE session_id=?', sid),
   upsert(a: Partial<Agent> & { name: string }) {
     const cur = agents.get(a.name);
+    const defined = Object.fromEntries(Object.entries(a).filter(([, v]) => v !== undefined)); // undefined can't be bound to SQLite
     const m = { ...(cur ?? { role: null, profile: null, model: null, cwd: null, parent: null, kind: 'external', status: 'idle',
-      activity: null, session_id: null, transcript: null, workspace: null, created: now() }), ...a, seen: now() } as Agent;
+      activity: null, session_id: null, transcript: null, workspace: null, created: now() }), ...defined, seen: now() } as Agent;
     run(`INSERT INTO agents(name,role,profile,model,cwd,parent,kind,status,activity,session_id,transcript,workspace,created,seen)
          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(name) DO UPDATE SET role=excluded.role,profile=excluded.profile,model=excluded.model,
          cwd=excluded.cwd,parent=excluded.parent,kind=excluded.kind,status=excluded.status,activity=excluded.activity,session_id=excluded.session_id,
@@ -85,14 +86,18 @@ export const messages = {
   recent: (limit = 200) => all<Message>('SELECT * FROM messages ORDER BY id DESC LIMIT ?', limit).reverse(),
   /** Resolve when name has unread mail, or after timeout. */
   wait(name: string, ms: number, signal?: AbortSignal): Promise<Message[]> {
+    if (signal?.aborted) return Promise.resolve([]);
     const have = messages.take(name);
     if (have.length || ms <= 0) return Promise.resolve(have);
     return new Promise((res) => {
-      const done = () => { clearTimeout(t); events.off('inbox', on); signal?.removeEventListener('abort', done); res(messages.take(name)); };
-      const on = (r: string) => { if (r === name) setTimeout(done, 150); }; // small debounce to batch bursts
-      const t = setTimeout(done, ms);
+      let deb: ReturnType<typeof setTimeout> | undefined;
+      // Abort must not take(): nobody would receive those messages, so they would be lost as read.
+      const finish = (fetch: boolean) => { clearTimeout(t); clearTimeout(deb); events.off('inbox', on); signal?.removeEventListener('abort', onAbort); res(fetch ? messages.take(name) : []); };
+      const onAbort = () => finish(false);
+      const on = (r: string) => { if (r === name) { clearTimeout(deb); deb = setTimeout(() => finish(true), 150); } }; // small debounce to batch bursts
+      const t = setTimeout(() => finish(true), ms);
       events.on('inbox', on);
-      signal?.addEventListener('abort', done);
+      signal?.addEventListener('abort', onAbort);
     });
   },
   /** Compact rendering used everywhere an agent reads mail (token-lean). */
@@ -110,7 +115,7 @@ export const tasks = {
   get: (id: number) => get<Task>('SELECT * FROM tasks WHERE id=?', id),
   add(creator: string, title: string, detail?: string, assignee?: string, deps: number[] = []) {
     const id = Number(run('INSERT INTO tasks(title,detail,assignee,creator,deps,ts,updated,status) VALUES(?,?,?,?,?,?,?,?)',
-      title, detail ?? null, assignee ?? null, creator, JSON.stringify(deps), now(), now(), assignee ? 'claimed' : 'open').lastInsertRowid);
+      title, detail ?? null, assignee ?? null, creator, JSON.stringify(Array.isArray(deps) ? deps.map(Number) : []), now(), now(), assignee ? 'claimed' : 'open').lastInsertRowid);
     const t = tasks.get(id)!;
     emit('task', t);
     if (assignee) messages.send(creator, assignee, `task #${id} assigned: ${title}${detail ? ` — ${detail}` : ''}`);
@@ -119,7 +124,7 @@ export const tasks = {
   /** Claim a specific task, or the oldest open one whose deps are done. */
   claim(name: string, id?: number) {
     const cand = id ? [tasks.get(id)].filter(Boolean) as Task[] : tasks.list('open').filter(depsDone);
-    const t = cand.find((x) => x.status === 'open' || (x.status === 'claimed' && x.assignee === name));
+    const t = cand.find((x) => (x.status === 'open' && depsDone(x)) || (x.status === 'claimed' && x.assignee === name));
     if (!t) return undefined;
     run(`UPDATE tasks SET status='claimed', assignee=?, updated=? WHERE id=?`, name, now(), t.id);
     const u = tasks.get(t.id)!;
@@ -127,6 +132,7 @@ export const tasks = {
     return u;
   },
   finish(name: string, id: number, result: string, ok = true) {
+    result ??= ''; // undefined can't be bound to SQLite
     const t = tasks.get(id);
     if (!t) return undefined;
     run('UPDATE tasks SET status=?, result=?, assignee=COALESCE(assignee,?), updated=? WHERE id=?', ok ? 'done' : 'failed', result, name, now(), id);
@@ -144,7 +150,7 @@ export const notes = {
   list: () => all<{ k: string; v: string; author: string; ts: number }>('SELECT * FROM notes ORDER BY k'),
   get: (k: string) => get<{ v: string }>('SELECT v FROM notes WHERE k=?', k)?.v,
   set(author: string, k: string, v: string) {
-    if (v === '') { run('DELETE FROM notes WHERE k=?', k); emit('note:remove', k); return; }
+    if (!v) { run('DELETE FROM notes WHERE k=?', k); emit('note:remove', k); return; }
     run('INSERT INTO notes(k,v,author,ts) VALUES(?,?,?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v,author=excluded.author,ts=excluded.ts', k, v, author, now());
     emit('note', { k, v, author, ts: now() });
   },

@@ -2,8 +2,8 @@
 //   --mcp-config  -> bridge MCP (send/inbox/tasks/notes/spawn)   identity = ?agent=<name>
 //   --settings    -> HTTP hooks (status + push delivery of messages, zero polling)
 //   --append-system-prompt -> short team protocol
-import { spawn as cpSpawn, execFileSync } from 'node:child_process';
-import { existsSync, readdirSync, readFileSync, writeFileSync, mkdirSync, statSync } from 'node:fs';
+import { spawn as cpSpawn, execFile, execFileSync, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { existsSync, readdirSync, readFileSync, writeFileSync, renameSync, mkdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { blobs, kvGet, DATA_DIR, run as dbRun, get } from './db.ts';
@@ -39,18 +39,26 @@ if (!profiles.list().length) DEFAULTS.forEach((p) => profiles.put(p));
 export const profileFor = (idOrModel?: string): Profile => {
   const all = profiles.list<Profile>();
   return all.find((p) => p.id === idOrModel) ?? all.find((p) => p.kind === 'claude' && p.model === idOrModel)
-    ?? (idOrModel && /^(opus|sonnet|haiku|claude-)/.test(idOrModel) ? { ...all.find((p) => p.isDefault)!, id: idOrModel, model: idOrModel } : undefined)
+    ?? (idOrModel && /^(opus|sonnet|haiku|claude-)/.test(idOrModel) ? { ...(all.find((p) => p.isDefault && p.kind === 'claude') ?? DEFAULTS[0]), id: idOrModel, model: idOrModel } : undefined)
     ?? all.find((p) => p.isDefault) ?? DEFAULTS[0];
 };
 
 // ---------- locate claude ----------
-let claudeCache: string | null = null;
+// Not cached: a Claude Code update moves claude.exe to a new versioned folder, and discovery is cheap.
+// Short TTL: called on every /api/state, and where.exe costs ~50ms; still picks up Claude Code updates within a minute.
+let claudeCache: { path: string; at: number } | null = null;
 export function claudeBin(): string {
   const override = kvGet<string>('claudePath', '');
   if (override && existsSync(override)) return override;
-  if (claudeCache && existsSync(claudeCache)) return claudeCache;
+  if (claudeCache && Date.now() - claudeCache.at < 60e3 && existsSync(claudeCache.path)) return claudeCache.path;
+  const found = findClaude();
+  claudeCache = { path: found, at: Date.now() };
+  return found;
+}
+function findClaude(): string {
   const cands: string[] = [];
-  try { cands.push(...execFileSync('where.exe', ['claude'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).split(/\r?\n/).filter((l) => /\.(exe|cmd)$/i.test(l))); } catch {}
+  // Only .exe: spawning a .cmd shim without a shell fails on Windows (EINVAL).
+  try { cands.push(...execFileSync('where.exe', ['claude'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).split(/\r?\n/).filter((l) => /\.exe$/i.test(l.trim())).map((l) => l.trim())); } catch {}
   cands.push(join(homedir(), '.local', 'bin', 'claude.exe'));
   // Claude desktop app ships its own CLI: %APPDATA%\Claude\claude-code\<ver>\<hash>\claude.exe
   // (MSIX install: outside the app that folder really lives in %LOCALAPPDATA%\Packages\Claude_*\LocalCache\Roaming)
@@ -62,8 +70,7 @@ export function claudeBin(): string {
       .sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
     for (const v of vers) for (const h of readdirSync(join(root, v))) cands.push(join(root, v, h, 'claude.exe'));
   }
-  claudeCache = cands.find((c) => existsSync(c)) ?? 'claude';
-  return claudeCache;
+  return cands.find((c) => existsSync(c)) ?? 'claude';
 }
 
 // ---------- protocol (kept short: it is paid on every turn) ----------
@@ -88,7 +95,8 @@ const hookSettings = (name: string) => {
 const mcpConfig = (name: string) => ({ mcpServers: { bridge: { type: 'http', url: `${HUB}/mcp?agent=${encodeURIComponent(name)}` } } });
 
 function claudeArgs(a: { name: string; role?: string | null; parent?: string | null }, prof: Profile, model?: string, x: { headless?: boolean; effort?: string } = {}) {
-  const dir = join(RUNTIME, a.name);
+  // 'agent-' prefix: no Windows reserved names (CON, NUL...); '.' escaped: a name of '..' must not climb out of RUNTIME.
+  const dir = join(RUNTIME, 'agent-' + a.name.replace(/\./g, '%2E'));
   mkdirSync(dir, { recursive: true });
   const mcp = join(dir, 'mcp.json'), set = join(dir, 'settings.json'), sys = join(dir, 'protocol.md');
   writeFileSync(mcp, JSON.stringify(mcpConfig(a.name)));
@@ -112,15 +120,20 @@ function claudeArgs(a: { name: string; role?: string | null; parent?: string | n
 /** Skip the CLI's first-run wizard and the trust prompt for folders the user picked, so agents start straight away. */
 function ensureCliReady(cwd: string, prof: Profile) {
   const file = prof.configDir ? join(prof.configDir, '.claude.json') : join(homedir(), '.claude.json');
-  let j: any = {};
-  try { j = JSON.parse(readFileSync(file, 'utf8')); } catch { if (existsSync(file)) return; }
-  const key = cwd.replace(/\\/g, '/');
-  let dirty = false;
-  if (!j.hasCompletedOnboarding) { j.hasCompletedOnboarding = true; dirty = true; }
-  if (!j.theme) { j.theme = 'dark'; dirty = true; }
-  j.projects ??= {};
-  if (!j.projects[key]?.hasTrustDialogAccepted) { j.projects[key] = { ...(j.projects[key] ?? {}), hasTrustDialogAccepted: true }; dirty = true; }
-  if (dirty) writeFileSync(file, JSON.stringify(j, null, 2));
+  try {
+    let j: any = {};
+    // Unreadable or unparsable (e.g. a running claude is mid-write): leave it alone, never overwrite with {}.
+    try { j = JSON.parse(readFileSync(file, 'utf8')); } catch { if (existsSync(file)) return; }
+    if (!j || typeof j !== 'object') return;
+    const key = cwd.replace(/\\/g, '/');
+    let dirty = false;
+    if (!j.hasCompletedOnboarding) { j.hasCompletedOnboarding = true; dirty = true; }
+    if (!j.theme) { j.theme = 'dark'; dirty = true; }
+    j.projects ??= {};
+    if (!j.projects[key]?.hasTrustDialogAccepted) { j.projects[key] = { ...(j.projects[key] ?? {}), hasTrustDialogAccepted: true }; dirty = true; }
+    // Atomic replace so a crash or a concurrent reader never sees a half-written file. Locked file (EBUSY/EPERM): skip.
+    if (dirty) { const tmp = `${file}.bridge-tmp`; writeFileSync(tmp, JSON.stringify(j, null, 2)); renameSync(tmp, file); }
+  } catch {}
 }
 
 export interface SpawnOpts {
@@ -148,8 +161,26 @@ export function startAgent(o: SpawnOpts) {
     return { term: null, agent };
   }
   if (o.prompt) args.push(o.prompt);
-  const term = ptys.spawn({ cmd: claudeBin(), args, cwd, env, title: name, agent: name, workspace: o.workspace, cols: o.cols, rows: o.rows });
-  return { term, agent };
+  try {
+    const term = ptys.spawn({ cmd: claudeBin(), args, cwd, env, title: name, agent: name, workspace: o.workspace, cols: o.cols, rows: o.rows });
+    return { term, agent };
+  } catch (x: any) {
+    // Pty could not start (claude missing, bad cwd): don't leave a 'starting' ghost behind.
+    agents.upsert({ name, status: 'offline', activity: `failed to start: ${x?.message ?? x}` });
+    throw x;
+  }
+}
+
+/** Live headless children by agent name, so stopAgent can kill them. */
+const headless = new Map<string, ChildProcessWithoutNullStreams>();
+
+/** `claude -p --output-format json` prints one JSON object; tolerate stray lines before/after it. */
+function parseJsonOut(s: string): any {
+  const t = s.trim();
+  const starts = [...t.matchAll(/^\{/gm)].map((m) => m.index!).reverse();
+  for (const i of starts) { try { return JSON.parse(t.slice(i)); } catch {} }
+  for (const line of t.split('\n').reverse()) { try { return JSON.parse(line); } catch {} }
+  throw new Error('no JSON in claude output');
 }
 
 function runHeadless(name: string, args: string[], env: Record<string, string>, cwd: string, prompt: string, parent: string | undefined, prof: Profile, routine?: string) {
@@ -159,16 +190,15 @@ function runHeadless(name: string, args: string[], env: Record<string, string>, 
   emit('run', get('SELECT * FROM runs WHERE id=?', runId));
   const e = { ...process.env, ...env } as Record<string, string>;
   for (const [k, v] of Object.entries(e)) if (v === '') delete e[k];
-  const cp = cpSpawn(claudeBin(), full, { cwd, env: e, windowsHide: true });
-  cp.stdin.end(prompt);
-  let out = '', err = '';
-  cp.stdout.on('data', (d) => (out += d));
-  cp.stderr.on('data', (d) => (err += d));
-  agents.upsert({ name, status: 'working', activity: 'headless run' });
-  cp.on('close', (code) => {
+  let out = '', err = '', done = false, cp: ChildProcessWithoutNullStreams | undefined;
+  // Single exit point (close and error can both fire). A run whose agent was stopped (or reused by a newer run) must not touch the agent row.
+  const settle = (code: number | null) => {
+    if (done) return; done = true;
+    const current = !cp || headless.get(name) === cp;
+    if (current) headless.delete(name);
     let result = '', cost: number | null = null, tokens: number | null = null, ok = code === 0;
     try {
-      const j = JSON.parse(out.trim().split('\n').at(-1)!);
+      const j = parseJsonOut(out);
       result = String(j.result ?? ''); cost = j.total_cost_usd ?? null; ok = ok && !j.is_error;
       const u = j.usage ?? {};
       tokens = (u.input_tokens ?? 0) + (u.output_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0);
@@ -176,6 +206,7 @@ function runHeadless(name: string, args: string[], env: Record<string, string>, 
     } catch { result = (out || err).slice(-4000); ok = false; }
     dbRun('UPDATE runs SET ended=?, status=?, result=?, cost=?, tokens=? WHERE id=?', Date.now(), ok ? 'success' : 'error', result, cost, tokens, runId);
     emit('run', get('SELECT * FROM runs WHERE id=?', runId));
+    if (!current) return;
     agents.upsert({ name, status: 'offline', activity: ok ? 'done' : 'failed' });
     // task_done already notified the parent: don't pay for the same news twice.
     const reported = ok && parent && get(`SELECT 1 FROM tasks WHERE assignee=? AND creator=? AND status IN ('done','failed') AND updated>=?`, name, parent, started);
@@ -186,22 +217,48 @@ function runHeadless(name: string, args: string[], env: Record<string, string>, 
         messages.send(name, parent, `${ok ? 'done' : 'FAILED'} (run #${runId}). Summary: ${result.slice(0, 400)}… Full: note_get("result/${name}")`);
       } else messages.send(name, parent, `${ok ? 'done' : 'FAILED'}: ${result || '(no output)'}`);
     }
-  });
+  };
+  try { cp = cpSpawn(claudeBin(), full, { cwd, env: e, windowsHide: true }); } catch (x: any) { err = String(x?.message ?? x); }
+  if (!cp) { settle(null); return runId; } // e.g. claude not found: the run fails, the hub keeps running
+  const child = cp;
+  headless.set(name, child);
+  // Without this listener a missing claude.exe (ENOENT) would crash the hub.
+  child.on('error', (x) => { err += String(x.message); settle(null); });
+  child.stdout.setEncoding('utf8'); child.stderr.setEncoding('utf8');
+  // EPIPE if claude exits before reading the prompt: must not become an unhandled error.
+  child.stdin.on('error', () => {});
+  child.stdin.end(prompt);
+  child.stdout.on('data', (d) => (out += d));
+  child.stderr.on('data', (d) => (err += d));
+  agents.upsert({ name, status: 'working', activity: 'headless run' });
+  child.on('close', (code) => settle(code));
   return runId;
 }
 
-/** One-shot run used by scheduled routines. */
+/** One-shot run used by scheduled routines. Never throws: it runs inside the cron callback. */
 export function runRoutineOnce(r: { id: string; name: string; profile?: string; cwd?: string; prompt: string; notify?: string }) {
-  const prof = profileFor(r.profile);
-  const name = agents.uniqueName(`routine-${r.name}`);
-  const { args, env } = claudeArgs({ name, role: 'routine', parent: r.notify ?? null }, prof, undefined, { headless: true });
-  agents.upsert({ name, role: 'routine', profile: prof.id, model: prof.model ?? null, cwd: r.cwd ?? homedir(), parent: r.notify ?? null, kind: 'headless', status: 'starting', created: Date.now() });
-  return runHeadless(name, args, env, r.cwd && existsSync(r.cwd) ? r.cwd : homedir(), r.prompt, r.notify, prof, r.id);
+  try {
+    const prof = profileFor(r.profile);
+    const name = agents.uniqueName(`routine-${r.name ?? r.id ?? 'run'}`);
+    const { args, env } = claudeArgs({ name, role: 'routine', parent: r.notify ?? null }, prof, undefined, { headless: true });
+    agents.upsert({ name, role: 'routine', profile: prof.id, model: prof.model ?? null, cwd: r.cwd ?? homedir(), parent: r.notify ?? null, kind: 'headless', status: 'starting', created: Date.now() });
+    return runHeadless(name, args, env, r.cwd && existsSync(r.cwd) ? r.cwd : homedir(), r.prompt ?? '', r.notify, prof, r.id);
+  } catch (x: any) {
+    emit('error', `routine ${r?.name ?? r?.id}: ${x?.message ?? x}`);
+    return null;
+  }
 }
 
 export function stopAgent(name: string) {
   const t = ptys.byAgent(name);
   if (t) ptys.kill(t.id);
+  const hp = headless.get(name);
+  if (hp) {
+    headless.delete(name);
+    // Whole tree on Windows (claude spawns MCP children), as in ptys.kill.
+    if (process.platform === 'win32') execFile('taskkill', ['/PID', String(hp.pid), '/T', '/F'], () => {});
+    try { hp.kill(); } catch {}
+  }
   agents.upsert({ name, status: 'offline', activity: null });
 }
 

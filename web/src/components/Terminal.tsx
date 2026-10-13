@@ -24,8 +24,9 @@ export function Terminal({ id, focused, onFocus }: { id: string; focused: boolea
     // Ctrl+C copies when there is a selection, Ctrl+V pastes (Windows-terminal behaviour).
     t.attachCustomKeyEventHandler((e) => {
       if (e.type !== 'keydown') return true;
-      if (e.ctrlKey && e.key === 'c' && t.hasSelection()) { navigator.clipboard.writeText(t.getSelection()); t.clearSelection(); return false; }
-      if (e.ctrlKey && e.key === 'v') { navigator.clipboard.readText().then((s) => t.paste(s)); return false; }
+      // preventDefault stops the browser's copy/paste event, which xterm would otherwise handle a second time (double paste).
+      if (e.ctrlKey && e.key === 'c' && t.hasSelection()) { e.preventDefault(); navigator.clipboard.writeText(t.getSelection()).catch(() => {}); t.clearSelection(); return false; }
+      if (e.ctrlKey && e.key === 'v') { e.preventDefault(); navigator.clipboard.readText().then((s) => t.paste(s)).catch(() => {}); return false; }
       return true;
     });
     const off = onPty(id, (d, init) => { if (init) t.reset(); t.write(d); });
@@ -38,7 +39,7 @@ export function Terminal({ id, focused, onFocus }: { id: string; focused: boolea
     const ro = new ResizeObserver(doFit);
     ro.observe(el.current!);
     doFit();
-    return () => { ro.disconnect(); off(); sub.dispose(); t.dispose(); };
+    return () => { cancelAnimationFrame(raf); ro.disconnect(); off(); sub.dispose(); t.dispose(); };
   }, [id]);
 
   useEffect(() => { if (focused) term.current?.focus(); }, [focused]);

@@ -26,22 +26,26 @@ export function handleHook(event: string, agentParam: string | null, body: any):
     if (!agentParam) return {}; // unknown external session (global hooks) that never joined
     a = agents.upsert({ name: agentParam, kind: 'external', status: 'idle' });
   }
+  // Global hooks also fire for hub-spawned sessions; their own ?agent= hook already handles them (avoids double takes and status flapping).
+  if (!agentParam && a.kind !== 'external') return {};
   const name = a.name;
   const base = { session_id: sid ?? a.session_id, transcript: body?.transcript_path ?? a.transcript, ...(body?.cwd ? { cwd: body.cwd } : {}) };
   switch (event) {
     case 'SessionStart':
-      agents.upsert({ name, ...base, status: 'idle', activity: null });
+      // 'compact' fires mid-turn: keep 'working' so a nudge never types into a busy TUI.
+      agents.upsert({ name, ...base, status: body?.source === 'compact' && a.status === 'working' ? 'working' : 'idle', activity: null });
       return inject('SessionStart', name);
     case 'UserPromptSubmit':
       agents.upsert({ name, ...base, status: 'working', activity: `› ${brief(body?.prompt, 90)}` });
       return inject('UserPromptSubmit', name);
     case 'PreToolUse':
-      agents.upsert({ name, ...base, status: 'working', activity: toolActivity(body?.tool_name ?? '?', body?.tool_input) });
+      agents.upsert({ name, ...base, status: 'working', activity: toolActivity(String(body?.tool_name ?? '?'), body?.tool_input) });
       return {};
     case 'PostToolUse':
       if (a.status !== 'working') agents.upsert({ name, ...base, status: 'working' });
       return inject('PostToolUse', name);
     case 'Notification':
+      if (body?.notification_type === 'auth_success') return {}; // not a human-attention prompt
       // idle_prompt = merely sitting at the prompt; only permission/elicitation prompts need the human.
       if (body?.notification_type === 'idle_prompt' || /waiting for your input/i.test(body?.message ?? '')) { agents.upsert({ name, ...base, status: 'idle' }); return {}; }
       agents.upsert({ name, ...base, status: 'waiting', activity: brief(body?.message ?? 'needs attention', 90) });
@@ -56,16 +60,31 @@ export function handleHook(event: string, agentParam: string | null, body: any):
       return {};
     }
     case 'SessionEnd':
+      // Stale end of a replaced session (/clear, resume) must not mark the live one offline.
+      if (sid && a.session_id && sid !== a.session_id) return {};
       agents.upsert({ name, ...base, status: 'offline', activity: null });
       return {};
   }
   return {};
 }
 
-/** Retry while the agent is still booting its TUI. */
+// Cooldown: a burst of mail must not stack several "[bridge]" lines + Enter in the TUI before its UserPromptSubmit lands.
+const lastNudge = new Map<string, number>();
+const cooling = (name: string) => Date.now() - (lastNudge.get(name) ?? 0) < 3000;
+/** True when the nudge was typed. Never throws: this runs inside timers, an exception there would crash the hub. */
+function tryNudge(name: string): boolean {
+  try {
+    if (cooling(name)) return false;
+    const ok = nudge(name);
+    if (ok) lastNudge.set(name, Date.now());
+    return ok;
+  } catch (e) { console.error('nudge failed', name, e); return false; }
+}
+/** Retry while the agent is still booting its TUI, or while a cooldown hides pending mail. */
 function nudgeSoon(name: string, tries = 6) {
-  if (nudge(name) || tries <= 0) return;
-  if (agents.get(name)?.status === 'starting') setTimeout(() => nudgeSoon(name, tries - 1), 2500);
+  if (tryNudge(name) || tries <= 0) return;
+  if (cooling(name)) setTimeout(() => nudgeSoon(name, tries - 1), 3000);
+  else if (agents.get(name)?.status === 'starting') setTimeout(() => nudgeSoon(name, tries - 1), 2500);
 }
 
 // Mail for an idle pane agent: wake it up (debounced so bursts become one nudge).
@@ -75,4 +94,4 @@ events.on('inbox', (rcpt: string) => {
   pending.set(rcpt, setTimeout(() => { pending.delete(rcpt); nudgeSoon(rcpt); }, 400));
 });
 // An agent that just went idle with mail queued (raced the Stop hook) also gets nudged.
-events.on('status', (a: Agent) => { if (a.status === 'idle') setTimeout(() => nudge(a.name), 300); });
+events.on('status', (a: Agent) => { if (a.status === 'idle') setTimeout(() => nudgeSoon(a.name), 300); });

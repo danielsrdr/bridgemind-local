@@ -7,6 +7,7 @@ const pill = document.getElementById('pill')!, txt = document.getElementById('tx
 for (let i = 0; i < 7; i++) bars.appendChild(document.createElement('i'));
 let cfg = { model: 'onnx-community/whisper-small', language: 'french' };
 let cur: Awaited<ReturnType<typeof record>> | null = null, raf = 0, warmed = false;
+let starting: Promise<void> = Promise.resolve(); // settles once the mic is open (or failed), so stop/cancel can't race it
 
 const ui = (cls: '' | 'busy' | 'err', t: string) => { pill.className = cls; txt.textContent = t; bars.style.display = cls ? 'none' : 'flex'; };
 
@@ -22,12 +23,14 @@ dict.on('config', (c) => {
   // One silent pass also compiles the GPU shaders.
   if (!warmed) { warmed = true; setTimeout(() => loadAsr(cfg.model).then(() => transcribe(new Float32Array(16000), cfg.model, cfg.language)).catch(() => (warmed = false)), 4000); }
 });
-dict.on('start', async () => {
+dict.on('start', () => {
   ui('', 'Écoute…');
-  try { cur = await record(); meter(); } catch (e: any) { ui('err', 'Micro indisponible'); dict.error(String(e)); }
+  cur?.stop(); cur = null; // a stale session must not keep the mic open
+  starting = record().then((r) => { cur = r; meter(); }, (e: any) => { ui('err', 'Micro indisponible'); dict.error(String(e)); });
 });
-dict.on('cancel', async () => { cancelAnimationFrame(raf); await cur?.stop(); cur = null; });
+dict.on('cancel', async () => { await starting; cancelAnimationFrame(raf); const r = cur; cur = null; await r?.stop(); });
 dict.on('stop', async () => {
+  await starting;
   cancelAnimationFrame(raf);
   if (!cur) return dict.result('');
   const blob = await cur.stop();

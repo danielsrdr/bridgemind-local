@@ -30,10 +30,15 @@ export const api = async <T = any>(path: string, method = 'GET', body?: unknown)
   return r.json();
 };
 
+let refreshSeq = 0;
 export async function refresh() {
+  const seq = ++refreshSeq;
   const s = await api('state');
+  if (seq !== refreshSeq || !s?.settings) return; // a newer snapshot is in flight, or hub error
   const st = useS.getState();
-  const ws = st.ws ?? s.settings.lastWorkspace ?? s.workspaces[0]?.id ?? null;
+  // Keep the active workspace only if it still exists (a deleted one must not stay selected).
+  const has = (id: string | null | undefined) => !!id && s.workspaces.some((w: Workspace) => w.id === id);
+  const ws = has(st.ws) ? st.ws : has(s.settings.lastWorkspace) ? s.settings.lastWorkspace : s.workspaces[0]?.id ?? null;
   useS.setState({ ...s, ws, ready: true });
 }
 
@@ -42,7 +47,13 @@ type PtyListener = (d: string, init?: boolean) => void;
 const ptyListeners = new Map<string, PtyListener>();
 let sock: WebSocket | null = null;
 const queue: string[] = [];
-export const wsSend = (o: unknown) => { const s = JSON.stringify(o); sock?.readyState === 1 ? sock.send(s) : queue.push(s); };
+export const wsSend = (o: any) => {
+  const s = JSON.stringify(o);
+  if (sock?.readyState === 1) return sock.send(s);
+  if (o.t === 'sub') return; // onopen re-subscribes every live listener anyway
+  if (queue.length >= 200) queue.shift(); // bounded while the hub is down
+  queue.push(s);
+};
 export function onPty(id: string, fn: PtyListener) { ptyListeners.set(id, fn); wsSend({ t: 'sub', id }); return () => { if (ptyListeners.get(id) === fn) ptyListeners.delete(id); }; }
 
 const upsert = <T,>(arr: T[], item: T, key: keyof T) => {
@@ -53,6 +64,9 @@ const upsert = <T,>(arr: T[], item: T, key: keyof T) => {
 
 /** Closed panes never come back, even if a late event for them arrives. */
 const removedTerms = new Set<string>();
+
+// Desktop app: the shell tells us when the hub process died (it restarts it; the socket then reconnects).
+(window as any).desktop?.onHubExit?.(() => useS.setState({ connected: false }));
 
 export function connect() {
   sock = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);

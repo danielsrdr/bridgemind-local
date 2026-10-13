@@ -42,8 +42,11 @@ export function CodeMode() {
   // Keyboard: Ctrl+Shift+T new pane, Ctrl+Shift+M maximize, Ctrl+Alt+Arrows move focus.
   useEffect(() => {
     const k = (e: KeyboardEvent) => {
+      // Leave typing in form fields alone (terminals are fine: their helper textarea lives in .xterm).
+      const tg = e.target as HTMLElement | null;
+      if (tg && /^(INPUT|TEXTAREA|SELECT)$/.test(tg.tagName) && !tg.closest('.xterm')) return;
       if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 't') { e.preventDefault(); setLaunch(true); }
-      if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'm' && focus) { e.preventDefault(); setMax((m) => (m ? null : focus)); }
+      if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'm' && focus && (max || rows.flat().includes(focus))) { e.preventDefault(); setMax((m) => (m ? null : focus)); }
       if (e.ctrlKey && e.altKey && e.key.startsWith('Arrow')) {
         const flat = rows.flat(), i = flat.indexOf(focus ?? '');
         const n = flat[(i + (e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : -1) + flat.length) % flat.length];
@@ -52,7 +55,7 @@ export function CodeMode() {
     };
     addEventListener('keydown', k, true);
     return () => removeEventListener('keydown', k, true);
-  }, [rows, focus]);
+  }, [rows, focus, max]);
 
   if (!w) return <Empty />;
   const shown = max && ids.includes(max) ? [[max]] : rows;
@@ -69,18 +72,19 @@ export function CodeMode() {
       </div>
       <div className="flex-1 min-h-0 p-1.5">
         {!ids.length ? <NoPanes onLaunch={() => setLaunch(true)} /> : (
-          <Group orientation="vertical" key={JSON.stringify(shown)}>
+          // Stable keys + panel ids: adding/closing a pane must not remount the other terminals (that reset their TUIs).
+          <Group orientation="vertical">
             {shown.map((r, ri) => (
-              <Fragment key={r.join()}>
+              <Fragment key={ri}>
                 {ri > 0 && <Separator className="h-1.5 hover:bg-accent/40 transition-colors rounded" />}
-                <Panel minSize={80}>
+                <Panel id={`row-${ri}`} minSize={80}>
                   <Group orientation="horizontal">
                     {r.map((id, ci) => {
                       const t = mine.find((x) => x.id === id)!;
                       return (
                         <Fragment key={id}>
                           {ci > 0 && <Separator className="w-1.5 hover:bg-accent/40 transition-colors rounded" />}
-                          <Panel minSize={160}><Pane t={t} focused={focus === id} max={max === id} onMax={() => setMax(max ? null : id)} /></Panel>
+                          <Panel id={id} minSize={160}><Pane t={t} focused={focus === id} max={max === id} onMax={() => setMax(max ? null : id)} /></Panel>
                         </Fragment>
                       );
                     })}
@@ -128,11 +132,13 @@ function QuickLaunch({ w }: { w: Workspace }) {
 
 export function LaunchDialog({ w, onClose }: { w: Workspace; onClose: () => void }) {
   const profiles = useS((s) => s.profiles);
-  const [o, setO] = useState({ profile: profiles.find((p) => p.isDefault)?.id ?? 'opus', cwd: w.folders[0] ?? '', name: '', role: '', prompt: '', headless: false });
+  // Profile resolved at render time, so profiles that load after the dialog opened are still picked up.
+  const [o, setO] = useState({ profile: '', cwd: w.folders[0] ?? '', name: '', role: '', prompt: '', headless: false });
   const [pick, setPick] = useState(false);
-  const isShell = profiles.find((p) => p.id === o.profile)?.kind === 'shell';
+  const pid = o.profile || profiles.find((p) => p.isDefault)?.id || profiles[0]?.id || 'opus';
+  const isShell = profiles.find((p) => p.id === pid)?.kind === 'shell';
   const go = async () => {
-    const r = await api(isShell ? 'terms' : 'agents', 'POST', { ...o, workspace: w.id, name: o.name || undefined, role: o.role || undefined, prompt: o.prompt || undefined });
+    const r = await api(isShell ? 'terms' : 'agents', 'POST', { ...o, profile: pid, workspace: w.id, name: o.name || undefined, role: o.role || undefined, prompt: o.prompt || undefined });
     const id = isShell ? r?.id : r?.term?.id;
     if (id) useS.setState({ focus: id });
     onClose();
@@ -141,7 +147,7 @@ export function LaunchDialog({ w, onClose }: { w: Workspace; onClose: () => void
     <Modal title="Nouveau pane" onClose={onClose}>
       <div className="grid gap-3">
         <div><div className="lbl mb-1">Agent</div>
-          <div className="flex flex-wrap gap-1">{profiles.map((p) => <button key={p.id} className={o.profile === p.id ? 'btn-p' : 'btn'} onClick={() => setO({ ...o, profile: p.id })}>{p.name}</button>)}</div></div>
+          <div className="flex flex-wrap gap-1">{profiles.map((p) => <button key={p.id} className={pid === p.id ? 'btn-p' : 'btn'} onClick={() => setO({ ...o, profile: p.id })}>{p.name}</button>)}</div></div>
         <div><div className="lbl mb-1">Dossier</div>
           <div className="flex gap-1"><select className="inp" value={o.cwd} onChange={(e) => setO({ ...o, cwd: e.target.value })}>
             {[...new Set([...w.folders, o.cwd])].filter(Boolean).map((f) => <option key={f} value={f}>{f}</option>)}</select>

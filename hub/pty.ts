@@ -31,8 +31,9 @@ export const ptys = {
     p.onData((d) => {
       t.buf.push(d); t.bufLen += d.length;
       while (t.bufLen > MAX_BUF && t.buf.length > 1) t.bufLen -= t.buf.shift()!.length;
+      if (t.bufLen > MAX_BUF) { t.buf[0] = t.buf[0].slice(-MAX_BUF); t.bufLen = t.buf[0].length; } // one oversized chunk
       pending += d;
-      timer ??= setTimeout(() => { events.emit('pty', id, pending); pending = ''; timer = null; }, 16);
+      timer ??= setTimeout(() => { if (terms.get(id) === t) events.emit('pty', id, pending); pending = ''; timer = null; }, 16); // no frames after kill
     });
     p.onExit(({ exitCode }) => {
       t.alive = false;
@@ -55,7 +56,7 @@ export const ptys = {
     setTimeout(() => t.alive && t.p.write('\r'), 120);
     return true;
   },
-  resize: (id: string, cols: number, rows: number) => { const t = terms.get(id); if (t?.alive && cols > 0 && rows > 0) try { t.p.resize(cols, rows); } catch {} },
+  resize: (id: string, cols: number, rows: number) => { const t = terms.get(id); if (t?.alive && Number.isInteger(cols) && Number.isInteger(rows) && cols > 0 && rows > 0) try { t.p.resize(cols, rows); } catch {} },
   scrollback: (id: string) => terms.get(id)?.buf.join('') ?? '',
   kill(id: string) {
     const t = terms.get(id);
@@ -65,6 +66,7 @@ export const ptys = {
       if (process.platform === 'win32') execFile('taskkill', ['/PID', String(t.pid), '/T', '/F'], () => {});
       try { t.p.kill(); } catch {}
     }
+    t.alive = false; // so pending typeLine/write timers never touch a killed pty
     terms.delete(id);
     emit('term:remove', id);
   },

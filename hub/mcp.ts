@@ -5,7 +5,10 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { agents, messages, tasks, notes } from './bus.ts';
 import { startAgent, stopAgent } from './agents.ts';
 
-const sessions = new Map<string, string>(); // mcp-session-id -> agent name
+const sessions = new Map<string, string>(); // mcp-session-id -> agent name (capped, oldest evicted)
+const remember = (sid: string, name: string) => { sessions.set(sid, name); if (sessions.size > 500) sessions.delete(sessions.keys().next().value!); };
+const VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05'];
+const bad = (id: any, code: number, message: string) => ({ jsonrpc: '2.0', id, error: { code, message } });
 
 const S = (props: Record<string, any>, required: string[] = []) => ({ type: 'object', properties: props, required });
 const str = (description?: string) => ({ type: 'string', ...(description ? { description } : {}) });
@@ -26,11 +29,22 @@ const TOOLS = [
 
 const text = (t: string, isError = false) => ({ content: [{ type: 'text', text: t }], ...(isError ? { isError } : {}) });
 
+/** Checks a tool call's arguments against its schema; returns an error message or undefined. */
+function argError(tool: string, a: any): string | undefined {
+  const s = TOOLS.find((t) => t.name === tool)?.inputSchema;
+  for (const k of s?.required ?? []) if (a[k] === undefined || a[k] === null) return `missing argument: ${k}`;
+  for (const [k, p] of Object.entries<any>(s?.properties ?? {})) {
+    const v = a[k];
+    if (v === undefined || v === null) continue;
+    if (p.type === 'array' ? !Array.isArray(v) : typeof v !== p.type) return `argument ${k} must be ${p.type}`;
+  }
+}
+
 async function call(me: string | undefined, sid: string | undefined, tool: string, a: any, signal: AbortSignal) {
   if (tool === 'join') {
     const name = agents.uniqueName(a.name);
     agents.upsert({ name, role: a.role ?? null, kind: 'external', status: 'working' });
-    if (sid) sessions.set(sid, name);
+    if (sid) remember(sid, name);
     return text(`joined as ${name}`);
   }
   if (!me) return text('Not identified: call join(name) first.', true);
@@ -41,14 +55,15 @@ async function call(me: string | undefined, sid: string | undefined, tool: strin
       return text(r.delivered.length ? `sent to ${r.delivered.join(',')}` : `no live recipient for "${a.to}"`, !r.delivered.length);
     }
     case 'inbox': {
-      const ms = await messages.wait(me, Math.min(Math.max(0, Number(a.wait ?? 0)), 300) * 1000, signal);
+      const ms = await messages.wait(me, Math.min(Math.max(0, Number(a.wait) || 0), 300) * 1000, signal);
       return text(ms.length ? messages.fmt(ms) : '(no messages)');
     }
     case 'agents':
       return text(agents.list().filter((x) => x.status !== 'offline' || x.name === me)
         .map((x) => `${x.name}${x.name === me ? ' (you)' : ''}${x.role ? ` @${x.role}` : ''} [${x.status}${x.model ? ` ${x.model}` : ''}]${x.activity ? ` ${x.activity}` : ''}`).join('\n'));
     case 'task_add': {
-      const t = tasks.add(me, a.title, a.detail, a.assignee, a.deps ?? []);
+      // deps must be numeric ids: a bad entry would make depsDone() throw for every task_claim
+      const t = tasks.add(me, a.title, a.detail, a.assignee, (a.deps ?? []).map(Number).filter(Number.isFinite));
       return text(`task #${t.id} ${t.status}`);
     }
     case 'task_claim': {
@@ -71,10 +86,11 @@ async function call(me: string | undefined, sid: string | undefined, tool: strin
     case 'spawn': {
       const parent = agents.get(me);
       const r = startAgent({ prompt: a.prompt, name: a.name, role: a.role, model: a.model ?? 'haiku', cwd: a.cwd ?? parent?.cwd ?? undefined,
-        headless: !!a.headless, effort: a.effort, parent: me, workspace: parent?.workspace ?? undefined });
+        headless: !!a.headless, effort: ['low', 'medium', 'high'].includes(a.effort) ? a.effort : undefined, parent: me, workspace: parent?.workspace ?? undefined });
       return text(r.agent ? `spawned ${r.agent.name}${a.headless ? ' (headless; result will be mailed to you)' : ' (pane)'}` : 'spawned shell');
     }
     case 'stop':
+      if (!agents.get(a.name)) return text(`no such agent ${a.name}`, true);
       stopAgent(a.name);
       return text(`stopped ${a.name}`);
   }
@@ -82,20 +98,25 @@ async function call(me: string | undefined, sid: string | undefined, tool: strin
 }
 
 async function rpc(msg: any, me: string | undefined, sid: string | undefined, signal: AbortSignal): Promise<any> {
+  if (!msg || typeof msg !== 'object' || Array.isArray(msg)) return bad(null, -32600, 'invalid request');
   const { id, method, params } = msg;
   if (id === undefined) return undefined; // notification
   const ok = (result: any) => ({ jsonrpc: '2.0', id, result });
+  if (typeof method !== 'string') return bad(id, -32600, 'invalid request');
   switch (method) {
     case 'initialize':
-      return ok({ protocolVersion: params?.protocolVersion ?? '2025-06-18', capabilities: { tools: {} },
+      return ok({ protocolVersion: VERSIONS.includes(params?.protocolVersion) ? params.protocolVersion : VERSIONS[0], capabilities: { tools: {} },
         serverInfo: { name: 'bridgemind', version: '0.1.0' },
         instructions: 'Team bus: messages arrive automatically; keep messages short; use notes/tasks for shared state.' });
     case 'ping': return ok({});
     case 'tools/list': return ok({ tools: TOOLS });
-    case 'tools/call':
+    case 'tools/call': {
+      const err = argError(params?.name, params?.arguments ?? {});
+      if (err) return ok(text(err, true));
       try { return ok(await call(me, sid, params.name, params.arguments ?? {}, signal)); }
       catch (e: any) { return ok(text(`error: ${e.message}`, true)); }
-    default: return { jsonrpc: '2.0', id, error: { code: -32601, message: `method not found: ${method}` } };
+    }
+    default: return bad(id, -32601, `method not found: ${method}`);
   }
 }
 
@@ -103,13 +124,15 @@ export async function handleMcp(req: IncomingMessage, res: ServerResponse, url: 
   if (req.method === 'DELETE') { sessions.delete(String(req.headers['mcp-session-id'])); res.writeHead(200).end(); return; }
   if (req.method !== 'POST') { res.writeHead(405, { Allow: 'POST' }).end(); return; }
   let msg: any;
-  try { msg = JSON.parse(body); } catch { res.writeHead(400).end(); return; }
+  try { msg = JSON.parse(body); } catch { return res.writeHead(400, { 'Content-Type': 'application/json' }).end(JSON.stringify(bad(null, -32700, 'parse error'))); }
+  if (Array.isArray(msg) && !msg.length) return res.writeHead(400, { 'Content-Type': 'application/json' }).end(JSON.stringify(bad(null, -32600, 'empty batch')));
   let sid = req.headers['mcp-session-id'] as string | undefined;
-  const isInit = (Array.isArray(msg) ? msg : [msg]).some((m) => m.method === 'initialize');
+  const isInit = (Array.isArray(msg) ? msg : [msg]).some((m) => m?.method === 'initialize');
   if (isInit) sid = randomUUID();
   const qAgent = url.searchParams.get('agent') ?? undefined;
-  if (sid && qAgent) sessions.set(sid, qAgent);
-  const me = qAgent ?? (sid ? sessions.get(sid) : undefined);
+  if (isInit && sid && qAgent) remember(sid, qAgent);
+  // a join() on this session overrides the URL identity; otherwise the URL names the agent
+  const me = (sid && sessions.get(sid)) || qAgent;
   const ac = new AbortController();
   res.on('close', () => ac.abort());
   const out = Array.isArray(msg)

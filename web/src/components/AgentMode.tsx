@@ -37,7 +37,8 @@ function Mission() {
   const [o, setO] = useState({ goal: '', lead: 'opus', worker: 'haiku', max: 3, cwd: w?.folders[0] ?? '' });
   const [pick, setPick] = useState(false);
   const go = async () => {
-    const r = await api('agents', 'POST', { name: 'lead', role: 'lead', profile: o.lead, cwd: o.cwd || w?.folders[0], workspace: ws, prompt: missionPrompt(o.goal, o.worker, o.max) });
+    const max = Math.min(8, Math.max(1, Math.round(o.max) || 1)); // empty/invalid number input gave 0 or NaN workers
+    const r = await api('agents', 'POST', { name: 'lead', role: 'lead', profile: o.lead, cwd: o.cwd || w?.folders[0], workspace: ws, prompt: missionPrompt(o.goal, o.worker, max) });
     if (r?.term) useS.setState({ mode: 'code', focus: r.term.id, dock: 'team' });
   };
   return (
@@ -79,7 +80,7 @@ function Routines() {
             <span className="text-[11px] text-mute">{r.next ? `prochain: ${new Date(r.next).toLocaleString()}` : '—'}</span>
             <button className="btn" onClick={() => api(`routines/${r.id}/run`, 'POST')}>▶ Maintenant</button>
             <button className="btn" onClick={() => setEdit(r)}>✎</button>
-            <button className="btn" onClick={async () => { await api(`routines/${r.id}`, 'DELETE'); useS.setState({ routines: routines.filter((x) => x.id !== r.id) }); }}>🗑</button>
+            <button className="btn" onClick={async () => { await api(`routines/${r.id}`, 'DELETE'); const s = await api('state'); useS.setState({ routines: s.routines }); }}>🗑</button>
           </div>
         ))}
         {!routines.length && <div className="text-mute text-xs">Ex : « Chaque matin, résume les commits d'hier et les TODO ouverts » — tourne en headless, résultat envoyé dans le fil d'équipe.</div>}

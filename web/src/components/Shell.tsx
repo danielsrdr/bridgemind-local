@@ -102,7 +102,7 @@ export function BrowserDock() {
     <div className="h-full flex flex-col border-l border-line bg-panel">
       <div className="flex gap-1 p-1.5 border-b border-line">
         <button className="btn" onClick={() => setK(k + 1)}>↻</button>
-        <input className="inp font-mono" value={u} onChange={(e) => setU(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { const v = /^https?:/.test(u) ? u : `http://${u}`; setU(v); set({ browserUrl: v }); setK(k + 1); } }} />
+        <input className="inp font-mono" value={u} onChange={(e) => setU(e.target.value)} onKeyDown={(e) => { const t = u.trim(); if (e.key === 'Enter' && t) { const v = /^https?:/i.test(t) ? t : `http://${t}`; setU(v); set({ browserUrl: v }); setK(k + 1); } }} />
         <button className="btn" onClick={() => window.open(browserUrl)}>↗</button>
       </div>
       <iframe key={k} src={browserUrl} className="flex-1 bg-white" />
@@ -164,7 +164,8 @@ function ProfileEditor({ p, onClose }: { p: Profile; onClose: () => void }) {
   const [o, setO] = useState<Profile>(p);
   const [env, setEnv] = useState(Object.entries(p.env ?? {}).map(([k, v]) => `${k}=${v}`).join('\n'));
   const save = async () => {
-    const e = Object.fromEntries(env.split('\n').map((l) => l.trim()).filter((l) => l.includes('=')).map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1)]));
+    // "KEY = val" must not keep a space in the key; a line without a key ("=x") is dropped
+    const e = Object.fromEntries(env.split('\n').map((l) => l.trim()).filter((l) => l.indexOf('=') > 0).map((l) => [l.slice(0, l.indexOf('=')).trim(), l.slice(l.indexOf('=') + 1).trim()]));
     await api('profiles', 'POST', { ...o, env: e, args: o.args?.filter(Boolean) });
     await refresh(); onClose();
   };

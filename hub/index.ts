@@ -1,8 +1,8 @@
 // BridgeMind Local hub: one process = HTTP API + WebSocket + MCP + hooks + PTYs + scheduler.
 import './env.ts';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { readFileSync, existsSync, readdirSync, writeFileSync, statSync } from 'node:fs';
-import { join, extname, dirname, resolve } from 'node:path';
+import { readFileSync, existsSync, readdirSync, writeFileSync, renameSync, statSync } from 'node:fs';
+import { join, extname, dirname, resolve, sep } from 'node:path';
 import { homedir } from 'node:os';
 import { spawn, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -23,6 +23,8 @@ const HUMAN = 'human';
 
 // Agents marked live from a previous hub run are stale (their PTYs died with it).
 for (const a of agents.list()) if (a.status !== 'offline' && a.kind !== 'external') agents.upsert({ name: a.name, status: 'offline', activity: null });
+// Same for headless runs: a 'running' row from a previous hub can never finish (and would block its routine).
+run("UPDATE runs SET status='error', ended=?, result=COALESCE(result,'interrupted: hub restarted') WHERE status='running'", Date.now());
 
 const workspaces = {
   list: () => all('SELECT * FROM workspaces ORDER BY updated DESC').map((w: any) => ({ ...w, folders: JSON.parse(w.folders), layout: JSON.parse(w.layout) })),
@@ -45,7 +47,7 @@ const dictationCfg = () => ({ enabled: true, hotkey: 'ctrl+win', model: 'onnx-co
 // ---------- global integration (opt-in): makes ANY Claude Code session (desktop app included) a team member ----------
 function integrate(on: boolean) {
   const p = join(homedir(), '.claude', 'settings.json');
-  const s = existsSync(p) ? JSON.parse(readFileSync(p, 'utf8')) : {};
+  const s = existsSync(p) ? JSON.parse(readFileSync(p, 'utf8')) : {}; // corrupt settings throw before anything is changed
   s.hooks ??= {};
   const mine = (h: any) => JSON.stringify(h).includes(`${HUB}/hook/`);
   for (const ev of ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Notification', 'Stop', 'SessionEnd']) {
@@ -53,16 +55,29 @@ function integrate(on: boolean) {
     if (on) s.hooks[ev].push({ ...(/Tool/.test(ev) ? { matcher: '*' } : {}), hooks: [{ type: 'http', url: `${HUB}/hook/${ev}`, timeout: 5 }] });
     if (!s.hooks[ev].length) delete s.hooks[ev];
   }
-  writeFileSync(p, JSON.stringify(s, null, 2));
   try { execFileSync(claudeBin(), ['mcp', 'remove', '-s', 'user', 'bridge'], { stdio: 'ignore' }); } catch {}
-  if (on) execFileSync(claudeBin(), ['mcp', 'add', '-s', 'user', '--transport', 'http', 'bridge', `${HUB}/mcp`], { stdio: 'ignore' });
+  if (on) execFileSync(claudeBin(), ['mcp', 'add', '-s', 'user', '--transport', 'http', 'bridge', `${HUB}/mcp`], { stdio: 'ignore' }); // throws: settings untouched
+  writeFileSync(`${p}.bridge.tmp`, JSON.stringify(s, null, 2)); // atomic replace: no half-written settings.json
+  renameSync(`${p}.bridge.tmp`, p);
   kvSet('integrated', on);
 }
 
 // ---------- http ----------
 const MIME: Record<string, string> = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.woff2': 'font/woff2', '.json': 'application/json', '.wasm': 'application/wasm', '.mjs': 'text/javascript' };
 const json = (res: ServerResponse, data: unknown, code = 200) => res.writeHead(code, { 'Content-Type': 'application/json' }).end(JSON.stringify(data ?? null));
-const readBody = (req: IncomingMessage) => new Promise<string>((ok) => { let b = ''; req.on('data', (c) => (b += c)); req.on('end', () => ok(b)); });
+const MAX_BODY = 10 * 1024 * 1024;
+const readBody = (req: IncomingMessage) => new Promise<string>((ok, no) => {
+  const cs: Buffer[] = []; let n = 0, big = false;
+  req.on('data', (c: Buffer) => { n += c.length; if (n > MAX_BODY) big = true; else cs.push(c); }); // keep draining, don't buffer
+  req.on('end', () => (big ? no(Object.assign(new Error('payload too large'), { status: 413 })) : ok(Buffer.concat(cs).toString())));
+  req.on('error', no);
+});
+const parse = (raw: string) => { const v = raw ? JSON.parse(raw) : {}; return v && typeof v === 'object' ? v : {}; };
+// Anti drive-by: only the hub's own origins may use /api, /ws, /mcp, /hook; Host must be the hub (blocks DNS rebinding).
+// 5173 = Vite dev (proxies to the hub, keeps Host localhost:5173). Requests without Origin (Claude Code MCP/hooks, curl) pass.
+const HOSTS = new Set([`127.0.0.1:${PORT}`, `localhost:${PORT}`, '127.0.0.1:5173', 'localhost:5173']);
+const ORIGINS = new Set([...HOSTS].map((h) => `http://${h}`));
+const allowed = (req: IncomingMessage, guarded = true) => HOSTS.has(req.headers.host ?? '') && (!guarded || req.headers.origin === undefined || ORIGINS.has(req.headers.origin));
 
 async function api(req: IncomingMessage, res: ServerResponse, url: URL, body: any) {
   const seg = url.pathname.split('/').slice(2).map(decodeURIComponent); // after /api
@@ -87,10 +102,12 @@ async function api(req: IncomingMessage, res: ServerResponse, url: URL, body: an
       if (m === 'DELETE') { stopAgent(b); agents.remove(b); return json(res, true); }
       break;
     case 'messages':
-      if (m === 'POST') return json(res, messages.send(body.from ?? HUMAN, body.to, body.body));
+      if (m === 'POST') { if (typeof body.to !== 'string' || typeof body.body !== 'string' || !body.body.trim()) return json(res, { error: 'to and body required' }, 400);
+        return json(res, messages.send(typeof body.from === 'string' ? body.from : HUMAN, body.to, body.body)); }
       break;
     case 'tasks':
-      if (m === 'POST') return json(res, tasks.add(HUMAN, body.title, body.detail, body.assignee || undefined, body.deps ?? []));
+      if (m === 'POST') { if (typeof body.title !== 'string' || !body.title.trim()) return json(res, { error: 'title required' }, 400);
+        return json(res, tasks.add(HUMAN, body.title, body.detail, body.assignee || undefined, body.deps ?? [])); }
       if (m === 'PATCH') {
         if (body.status === 'done' || body.status === 'failed') return json(res, tasks.finish(HUMAN, Number(b), body.result ?? '', body.status === 'done'));
         run('UPDATE tasks SET status=COALESCE(?,status), assignee=?, title=COALESCE(?,title), updated=? WHERE id=?', body.status ?? null, body.assignee ?? null, body.title ?? null, Date.now(), Number(b));
@@ -100,7 +117,7 @@ async function api(req: IncomingMessage, res: ServerResponse, url: URL, body: an
       if (m === 'DELETE') { tasks.remove(Number(b)); return json(res, true); }
       break;
     case 'notes':
-      if (m === 'POST') { notes.set(HUMAN, body.k, body.v); return json(res, true); }
+      if (m === 'POST') { if (typeof body.k !== 'string' || !body.k) return json(res, { error: 'k required' }, 400); notes.set(HUMAN, body.k, String(body.v ?? '')); return json(res, true); }
       break;
     case 'terms':
       if (m === 'POST') return json(res, startAgent({ ...body, profile: body.profile ?? 'shell' }).term);
@@ -118,10 +135,10 @@ async function api(req: IncomingMessage, res: ServerResponse, url: URL, body: an
     case 'fs': {
       const p = url.searchParams.get('path') || homedir();
       if (!isDir(p)) return json(res, { path: p, parent: null, dirs: [], error: 'not a directory' });
-      let dirs: string[] = [];
-      try { dirs = readdirSync(p, { withFileTypes: true }).filter((d) => d.isDirectory() && !d.name.startsWith('$')).map((d) => d.name).sort((x, y) => x.localeCompare(y)); } catch {}
+      let dirs: string[] = [], error: string | undefined;
+      try { dirs = readdirSync(p, { withFileTypes: true }).filter((d) => d.isDirectory() && !d.name.startsWith('$')).map((d) => d.name).sort((x, y) => x.localeCompare(y)); } catch (e: any) { error = e.code ?? 'unreadable'; }
       const par = dirname(p);
-      return json(res, { path: p, parent: par === p ? null : par, dirs, drives: process.platform === 'win32' ? 'CDEFGH'.split('').map((d) => `${d}:\\`).filter(isDir) : ['/'] });
+      return json(res, { path: p, parent: par === p ? null : par, dirs, error, drives: process.platform === 'win32' ? 'CDEFGH'.split('').map((d) => `${d}:\\`).filter(isDir) : ['/'] });
     }
     case 'settings':
       if (m === 'POST') { if ('claudePath' in body) kvSet('claudePath', body.claudePath); return json(res, state().settings); }
@@ -140,27 +157,36 @@ async function api(req: IncomingMessage, res: ServerResponse, url: URL, body: an
 }
 
 const server = createServer(async (req, res) => {
-  const url = new URL(req.url!, HUB);
-  const raw = req.method === 'GET' ? '' : await readBody(req);
   try {
+    const url = new URL(req.url!, HUB);
+    const guarded = url.pathname === '/mcp' || url.pathname.startsWith('/hook/') || url.pathname.startsWith('/api/');
+    if (!allowed(req, guarded)) return json(res, { error: 'forbidden' }, 403);
+    const raw = req.method === 'GET' ? '' : await readBody(req);
     if (url.pathname === '/mcp') return await handleMcp(req, res, url, raw);
     if (url.pathname.startsWith('/hook/')) {
-      return json(res, handleHook(url.pathname.slice(6), url.searchParams.get('agent'), raw ? JSON.parse(raw) : {}));
+      return json(res, handleHook(url.pathname.slice(6), url.searchParams.get('agent'), parse(raw)));
     }
-    if (url.pathname.startsWith('/api/')) return await api(req, res, url, raw ? JSON.parse(raw) : {});
-    // static UI
-    let f = join(DIST, url.pathname === '/' ? 'index.html' : url.pathname);
-    if (!f.startsWith(DIST) || !existsSync(f) || statSync(f).isDirectory()) f = join(DIST, 'index.html');
+    if (url.pathname.startsWith('/api/')) {
+      // a text/plain body is a CORS simple request: refuse it so no page can smuggle a JSON POST
+      if (raw && !String(req.headers['content-type'] ?? '').toLowerCase().startsWith('application/json')) return json(res, { error: 'Content-Type must be application/json' }, 415);
+      return await api(req, res, url, parse(raw));
+    }
+    // static UI: decode, resolve, and confine to dist/ (covers ../, %2e%2e, %2F, backslashes on Windows)
+    let f = resolve(DIST, '.' + decodeURIComponent(url.pathname));
+    if (!f.startsWith(DIST + sep) || !existsSync(f) || statSync(f).isDirectory()) f = join(DIST, 'index.html');
     if (!existsSync(f)) return res.writeHead(200, { 'Content-Type': 'text/plain' }).end('UI not built: run `npm run build` (or `npm run dev`).');
     res.writeHead(200, { 'Content-Type': MIME[extname(f)] ?? 'application/octet-stream', 'Cache-Control': f.includes('assets') ? 'max-age=31536000, immutable' : 'no-cache' }).end(readFileSync(f));
   } catch (e: any) {
-    console.error(e);
-    if (!res.headersSent) json(res, { error: e.message }, 500);
+    // bad JSON / bad percent-encoding are client errors, oversize bodies 413
+    const code = e.status ?? (e instanceof SyntaxError || e instanceof URIError ? 400 : 500);
+    if (code === 500) console.error(e);
+    if (!res.headersSent) json(res, { error: e.message }, code);
   }
 });
 
 // ---------- websocket ----------
-const wss = new WebSocketServer({ server, path: '/ws' });
+// WebSockets are not covered by CORS: verifyClient applies the same Origin/Host rules (PTY input is behind it).
+const wss = new WebSocketServer({ server, path: '/ws', verifyClient: (info: { req: IncomingMessage }) => allowed(info.req) });
 const clients = new Set<WebSocket>();
 const bcast = (o: unknown) => { const s = JSON.stringify(o); for (const c of clients) if (c.readyState === 1) c.send(s); };
 events.on('ui', bcast);
@@ -168,11 +194,15 @@ events.on('pty', (id: string, d: string) => bcast({ type: 'pty', id, d }));
 wss.on('connection', (ws) => {
   clients.add(ws);
   ws.on('close', () => clients.delete(ws));
+  ws.on('error', () => clients.delete(ws)); // an unhandled socket 'error' would crash the hub
   ws.on('message', (raw) => {
-    let m: any; try { m = JSON.parse(String(raw)); } catch { return; }
-    if (m.t === 'in') ptys.write(m.id, m.d);
-    else if (m.t === 'resize') ptys.resize(m.id, m.cols, m.rows);
-    else if (m.t === 'sub') ws.send(JSON.stringify({ type: 'pty:init', id: m.id, d: ptys.scrollback(m.id) }));
+    try {
+      const m: any = JSON.parse(String(raw));
+      if (!m || typeof m !== 'object') return;
+      if (m.t === 'in') ptys.write(m.id, m.d);
+      else if (m.t === 'resize') ptys.resize(m.id, m.cols, m.rows);
+      else if (m.t === 'sub') ws.send(JSON.stringify({ type: 'pty:init', id: m.id, d: ptys.scrollback(m.id) }));
+    } catch {} // a malformed frame must not throw out of the listener (hub crash)
   });
 });
 
