@@ -1,6 +1,7 @@
 // PTY sessions with bounded scrollback, multiplexed to UI over the websocket.
 import pty from '@lydell/node-pty';
 import { randomUUID } from 'node:crypto';
+import { execFile } from 'node:child_process';
 import { emit, events } from './bus.ts';
 
 export interface Term {
@@ -35,6 +36,8 @@ export const ptys = {
     });
     p.onExit(({ exitCode }) => {
       t.alive = false;
+      // Closed by the user: kill() already removed it — re-emitting 'term' would resurrect an empty black pane.
+      if (terms.get(id) !== t) return;
       if (timer) { clearTimeout(timer); events.emit('pty', id, pending); }
       events.emit('pty', id, `\r\n\x1b[90m[process exited ${exitCode}]\x1b[0m\r\n`);
       emit('term', pub(t));
@@ -57,7 +60,11 @@ export const ptys = {
   kill(id: string) {
     const t = terms.get(id);
     if (!t) return;
-    if (t.alive) try { t.p.kill(); } catch {}
+    if (t.alive) {
+      // Whole tree: claude.exe spawns shells/MCP children that ConPTY alone would orphan.
+      if (process.platform === 'win32') execFile('taskkill', ['/PID', String(t.pid), '/T', '/F'], () => {});
+      try { t.p.kill(); } catch {}
+    }
     terms.delete(id);
     emit('term:remove', id);
   },

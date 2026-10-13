@@ -36,3 +36,11 @@ button { cursor: pointer; }
 .drag { -webkit-app-region: drag; user-select: none; }
 .drag button, .drag input, .drag select, .drag a { -webkit-app-region: no-drag; }
 [data-modal] { -webkit-app-region: no-drag; }
+
+/* Board animations */
+@keyframes board-dash { to { stroke-dashoffset: -24; } }
+.board-flow { animation: board-dash 0.8s linear infinite; }
+@keyframes board-breathe { 50% { transform: scale(1.12); opacity: .5; } }
+.board-breathe { animation: board-breathe 3s ease-in-out infinite; }
+@keyframes board-scan { from { transform: translateX(-100%); } to { transform: translateX(300%); } }
+.board-scan { animation: board-scan 1.4s ease-in-out infinite; }

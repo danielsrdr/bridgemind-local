@@ -2,7 +2,7 @@
 import { create } from 'zustand';
 import type { Agent, Message, Task, Note, Profile, Workspace, Term, Routine, Run, Settings } from './types';
 
-export type Mode = 'agent' | 'code' | 'thread';
+export type Mode = 'agent' | 'code' | 'board' | 'thread';
 
 interface S {
   ready: boolean; connected: boolean; mode: Mode;
@@ -51,6 +51,9 @@ const upsert = <T,>(arr: T[], item: T, key: keyof T) => {
   const c = arr.slice(); c[i] = item; return c;
 };
 
+/** Closed panes never come back, even if a late event for them arrives. */
+const removedTerms = new Set<string>();
+
 export function connect() {
   sock = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
   sock.onopen = () => { useS.setState({ connected: true }); while (queue.length) sock!.send(queue.shift()!); refresh(); for (const id of ptyListeners.keys()) wsSend({ t: 'sub', id }); };
@@ -63,8 +66,8 @@ export function connect() {
     switch (m.type) {
       case 'agent': return useS.setState({ agents: upsert(s.agents, d, 'name') });
       case 'agent:remove': return useS.setState({ agents: s.agents.filter((a) => a.name !== d) });
-      case 'term': return useS.setState({ terms: upsert(s.terms, d, 'id') });
-      case 'term:remove': return useS.setState({ terms: s.terms.filter((t) => t.id !== d), focus: s.focus === d ? null : s.focus });
+      case 'term': return removedTerms.has(d.id) ? undefined : useS.setState({ terms: upsert(s.terms, d, 'id') });
+      case 'term:remove': removedTerms.add(d); return useS.setState({ terms: s.terms.filter((t) => t.id !== d), focus: s.focus === d ? null : s.focus });
       case 'message': return useS.setState({ messages: [...s.messages, d].slice(-500) });
       case 'read': return useS.setState({ messages: s.messages.map((x) => (x.rcpt === d.name && x.id <= d.upto ? { ...x, read: 1 } : x)) });
       case 'task': return useS.setState({ tasks: upsert(s.tasks, d, 'id') });

@@ -8,13 +8,14 @@ import { CodeMode } from './components/CodeMode';
 import { TeamDock } from './components/TeamDock';
 import { ThreadMode } from './components/ThreadMode';
 import { AgentMode } from './components/AgentMode';
+import { BoardMode } from './components/BoardMode';
 
 function App() {
   const { ready, mode, dock, settingsOpen, set } = useS();
   useEffect(() => {
     const k = (e: KeyboardEvent) => {
       if (!e.ctrlKey || e.shiftKey || e.altKey) return;
-      const m = ({ '1': 'agent', '2': 'code', '3': 'thread' } as const)[e.key as '1'];
+      const m = ({ '1': 'agent', '2': 'code', '3': 'thread', '4': 'board' } as const)[e.key as '1'];
       if (m) { e.preventDefault(); set({ mode: m }); }
       if (e.key === 'b') { e.preventDefault(); set({ dock: useS.getState().dock === 'team' ? null : 'team' }); }
     };
@@ -34,6 +35,7 @@ function App() {
               <div className={mode === 'code' ? 'h-full' : 'hidden'}><CodeMode /></div>
               {mode === 'thread' && <ThreadMode />}
               {mode === 'agent' && <AgentMode />}
+              {mode === 'board' && <BoardMode />}
             </Panel>
             {dock && <>
               <Separator className="w-1 hover:bg-accent/40 transition-colors" />
